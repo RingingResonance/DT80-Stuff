@@ -24,13 +24,13 @@ org 0x0800
 	nop
 	nop
 	nop
-init:  mvi a,0x07  ;Turn down brightness of CRT
+init:  mvi a,0x04  ;Turn down brightness of CRT
 	out 0x3A
-	mvi a,0xC8      ;Initialize video processor clock and config.
+	mvi a,0x48      ;Initialize video processor clock and config.
 	out 0x3F
-	mvi a,0x50      ;Initialize 'last line of text' pointer.
+	mvi a,0x52      ;Initialize 'last line of text' pointer. Still not sure what exactly this is actually.
 	out 0x3B        ;make this start of command text.
-	mvi a,0x00      ;Initialize 'last line of text' pointer.
+	mvi a,0xa0      ;Initialize 'last line of text' pointer. Still not sure what exactly this is actually.
 	out 0x3C
 ;initialize serial port
     ;Configure Bitrate Timer
