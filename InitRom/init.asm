@@ -7,19 +7,19 @@ org 0x0800
 	jmp TX
 	hlt         ;External RX routine marker
 	jmp RX
+	nop         ;IRQ TRAP
 	nop
 	nop
 	nop
+	nop         ;IRQ 5.5
 	nop
 	nop
 	nop
+	nop         ;IRQ 6.5
 	nop
 	nop
 	nop
-	nop
-	nop
-	nop
-	nop
+	nop         ;IRQ 7.5
 	nop
 	nop
 	nop
