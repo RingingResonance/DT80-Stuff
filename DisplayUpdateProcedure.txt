@@ -1,0 +1,26 @@
+Mar 10th 2022
+
+The CPU uses IRQ 7.5 for updating each line of text, or rather, the hardware pointers where that text exists. 
+
+The first pair is selected by default at addresses 0x3B (lower) and 0x3C (upper + linescroll + lineconfig). The second set are at a wider address range, but I will choose addresses 0x18 (upper + linescroll + lineconfig) and 0x20 (lower).
+
+I'm not sure at this point if the IRQ is at the beginning or the end of each line. I will have to either experiment or probe the circuit with two or more scope probes at the same time, but I have other projects on my main workbench at the moment. If I had to guess though, I would say it's at the beginning of each line as to give the CPU maximum time to setup the other set of pointer reg's before it's time to switch.
+
+Here's how I'm going to organize each line in memory...
+
+C = line config byte
+
+* = text to display
+
+L = lower address pointer of next line
+
+U = upper address pointer of next line
+
+C******* ~40/80//66/132 chars~ ********UL
+
+From here it's just a matter of writing a program that will do all of this. The cpu will fetch each address on an IRQ and load it into the alternate pointer reg. NOTE: The line config byte at the beginning of each line is also what tells the video processesor what pointer set to use for the line after the current one being displayed.
+
+Bit 0 of chip 55 (Read IO 0x32) is also connected to IRQ 7.5, but appreas to be the inverse and isn't latched. By measuring it's length to be longer than a single line of text you should be able to determine the start of a frame.
+
+After probing, it seems as though bit 0 of 0x32 is only low during video blanking, so this should indicate the start of a new frame.
+
