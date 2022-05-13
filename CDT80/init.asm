@@ -6,11 +6,12 @@ ccfg    equ 0x8FFE      ;Cursor config.
 lnmb    equ 0x8FFD      ;Current working line.
 flU     equ 0x8FFC      ;First Line address Upper.
 flL     equ 0x8FFB      ;First Line address Lower.
-ccnt    equ 0x8FFA      ;Column count.
-wlU     equ 0x8FF9      ;Current working line number Upper.
-wlL     equ 0x8FF8      ;Current working line number Lower.
-lcnt    equ 0x8FF7      ;Line count
+ccnt    equ 0x8FFA      ;Column count setting.
+wlU     equ 0x8FF9      ;Current displaying line number address Upper.
+wlL     equ 0x8FF8      ;Current displaying line number address Lower.
+lcnt    equ 0x8FF7      ;Line count setting.
 stack   equ 0x8FF6      ;Stack pointer
+bgnadr  equ 0x8000      ;Beginning address of ram
 
 org 0x0800
 	hlt         ;Init marker
@@ -35,8 +36,7 @@ org 0x0815
     nop
 	jmp  disp  ;IRQ 7.5
 
-init:   lxi h,stack
-    SPHL
+init:   lxi sp,stack    ;Load stack pointer
     mvi a,0x05  ;Turn down brightness of CRT
 	out 0x3A
 	mvi a,0x48  ;Initialize video processor clock and config.
@@ -82,12 +82,6 @@ init:   lxi h,stack
 
 ;Copy the third rom to video memory, and configure first line of text.
 ;0x1000 through 0x17FF is the third ROM. We are going to copy text/data from that to ram.
-    lxi h,ccnt
-    mvi m,0x50
-    lxi h,flU
-    mvi m,0xA0
-    lxi h,flL
-    mvi m,0x50
     lxi h,0x1000    ;Start of 3rd ROM
     lxi d,0x8050    ;Start of memory to copy to.
 cpy: mov a,m
@@ -102,17 +96,32 @@ cpy: mov a,m
     mov a,l
     cpi 0xFF
     jnz cpy
+;Initialize display.
+    lxi h,lcnt      ;22 lines
+    mvi m,0x16
+    lxi h,ccnt      ;80 column
+    mvi m,0x50      ;Use actual address
+    lxi h,flU
+    mvi m,0xA0
+    lxi h,flL
+    mvi m,0x50
+    call cls    ;clear screen
+;Reconfigure memory space
+    lxi h,stack     ;Reset the stack to our choosing.
+    lxi d,stack     ;Set DE to stack address as well.
+    SPHL
+    lxi b,bgnadr    ;Set the beginning address to our choosing.
 ;Configure IRQ's
     mvi a,0x0B  ;only enable IRQ 7.5 for now.
     sim
     EI          ;enable IRQ's
-    lxi h,stack     ;Reset the stack.
-    SPHL
+;Jump back to main program.
 	jmp 0x0194      ;Jump back to main program and continue.
 
 ;Hardware serial port routines.
 ;Transmit
 TX: mov a,b
+    call ftext  ;send the text to the display
     out 0x00    ;Load serial port with data byte. This should auto start transmitting.
 ;Loop until done transmitting.
 TL: in  0x01    ;Get status
@@ -136,15 +145,81 @@ RX: in  0x01    ;Get status
     pop b
     ret
 
-;Clear screen.
-cls:    call gmem   ;get memory needed for a full page
-        mov  b,h    ;move HL to BC
-        mov  c,l
+;#########################################################################################################################
+;Text to display input.
+ftext:  mov  b,a        ;get data stored in A and move it to B
+        cpi  0x0A       ;Check for new line char.
+        jz   nxtlne     ;If new line, make a new line!
+        cpi  0x0D       ;Check for return char.
+        jz   rtrn       ;If return char, reset cursor to 0x01!
+        cpi  0x08       ;Check for backspace.
+        jz   bkspc      ;If backspace, reduce cursor by 1 unless it's already at 1
+        push b          ;Store B on the stack
+        lxi  h,curs     ;get cursor position
+        mov  b,m        ;move it to B for compare
+        lxi  h,ccnt     ;get column setting
+        mov  a,m        ;move it to A
+        inr  a          ;increase A by one
+        cmp  b          ;compare the two
+        cz   nxtlne     ;If the same, call nxtlne
+        ;Now get the address of the cursor
+        call gliadr     ;Get line start address and put it in HL
+        xchg
+        lxi  h,curs     ;get cursor again
+        mov  c,m        ;move it to C
+        mvi  b,0x00     ;clear B
+        xchg
+        dad  b          ;add line address to the cursor position
+        pop  b          ;get our data to be stored back off the stack.
+        mov  m,b        ;store it in memory where the cursor is pointing to
+        lxi  h,curs     ;get cursor position
+        inr  m          ;increase cursor position by one.
+        mov  a,b        ;put B back into A for any other inline routines following this one that needs it.
+        ret
+;Next line of text to print
+nxtlne: lxi  h,lcnt     ;get total line count
+        mov  a,m        ;move it to A for a compare
+        lxi  h,lnmb     ;get working line number
+        cmp  m          ;compare it
+        cz   maxlne     ;if we've reached the max number of lines then jump here.
+        call gliadr     ;Get current line start address
+        mvi  m,0x00     ;Set it to not be the last line.
+        lxi  h,lnmb     ;get working line number
+        inr  m          ;increase line number by one
+        lxi  h,curs     ;get cursor
+        mvi  m,0x01     ;reset it to one
+        call slnt       ;setup next line of text
+        ret
+maxlne: lxi  h,lnmb     ;reset line number. Then increase the start address by one line, and set the last line to loop back.
+        mvi  m,0x00
+        ret
+
+rtrn:   lxi  h,curs     ;get cursor
+        mvi  m,0x01     ;reset it to one
+        ret
+
+bkspc:  lxi  h,curs     ;get cursor
+        mov  a,m        ;move it to A for comparison
+        cpi  0x01
+        rz              ;if it's already at 1, then just return
+        dcr  m          ;otherwise decrease it by 1
+        ret
+
+;Clear screen and buffer.
+cls:    call gmem   ;get memory needed for a full page, returns it in HL
+        mov  b,h    ;copy HL to BC
+        mov  c,l    ;BC contains the total amount of memory needed.
         lxi  h,flU  ;get address of first line
-        mov  d,m
+        mov  a,m
+        ani 0x0F    ;remove the upper 4 config bits
+        ori 0x80    ;and then OR the 8th bit
+        mov  d,a
         lxi  h,flL
-        mov  l,m
-        mov  h,d    ;HL now contains the starting address.
+        mov  e,m
+        mov  h,d    ;HL and DE now contains the starting address.
+        mov  l,e
+        dad  b      ;add BC to HL to get ending address of page. HL now contains ending address
+        xchg        ;Exchange DE and HL, HL is now starting address again, and DE is ending address.
 sfill:  mvi  m,0x20 ;start filling page with spaces.
         mov  a,d
         cmp  h
@@ -152,50 +227,90 @@ sfill:  mvi  m,0x20 ;start filling page with spaces.
         mov  a,e
         cmp  l
         jnz  kflin
-        mvi  h,flU  ;Done filling, now set some default attributes and line addresses.
-        mvi  l,flL
-        xchg        ;exchange HL and DE for later use.
-        mvi  m,0x40 ;First, and the last line of text.
-        lxi  h,curs ;reset cursor position to 0
+        ;Done filling, now set some default attributes and line addresses.
+        lxi  h,curs ;reset cursor position to 1
+        mvi  m,0x01
+        lxi  h,lnmb ;set working line number to 0
         mvi  m,0x00
-        lxi  h,ccnt ;Get column count and add it to HL
-        mov  c,m
-        mvi  b,0x00 ;clear B
-        xchg        ;get HL back
-        dad  b      ;add C to HL
-        inx  h      ;Increase HL by 1 to get past end of line. HL is now pointing to the Upper next line Address
-        mov  d,h    ;Make a copy of HL for later use.
-        mov  e,l
-        inx  h
-        inx  h      ;HL should now be pointing to next line of text
-        mvi  m,0x00
-        xchg        ;I have no clue what I'm doing here. It's 3:30AM and I need sleep. This is where I left off.
+        call slnt   ;Setup the first two lines of text.
         ret
-
 ;Keep filling the buffer.
 kflin:  inx  h
         jmp  sfill
 
-;Get memory required for column and line count specified. Returns it in HL
+;#########################################################################################################################
+;#########################################################################################################################
+;Setup next line of text.
+slnt:   call gliadr  ;Get working line start address, returns it in HL
+        mvi  m,0x40 ;Set attributes for this line, and for next line of text to be the last line.
+        xchg        ;Now put start address in DE
+        ;Get column count and add it to HL
+        lxi  h,ccnt
+        mov  c,m
+        mvi  b,0x00 ;clear B
+        xchg        ;get HL back from DE, as it contains the start address of the working line.
+        dad  b      ;add BC to HL, now it contains the line end address
+        inx  h      ;Increase HL by 1 to get past end of line. HL is now pointing to the Upper next line Address
+        mov  d,h    ;Make a copy of HL for later use.
+        mov  e,l
+        inx  h      ;Make HL contain the address of the next line.
+        inx  h
+        mvi  m,0x40 ;Set default for this line to be the last line.
+        xchg        ;Get the working line next address's address back.
+        mov  a,d    ;Now move DE to the next line address spot in memory, but use the default line settings.
+        ani 0x0F    ;remove the first 4 bits
+        ori 0xA0    ;and then OR 0xA0
+        mov  m,a
+        inx  h
+        mov  m,e
+        ret
+
+;Get line start address of current working line. Returns it in HL
+gliadr: lxi  h,ccnt ;get column count and put it in A
+        mov  a,m
+        adi  0x03   ;add three bytes to account for the attribute and address bytes.
+        mov  c,a    ;move it to C
+        mvi  b,0x00 ;clear B, BC now contains line data count.
+        lxi  h,lnmb ;Put working line number in D
+        mov  d,m
+        call mult   ;Multiply the two, returns the result in HL.
+        xchg        ;Move HL to DE
+        lxi  h,flU  ;Get start address
+        mov  a,m
+        ani 0x0F    ;remove the first 4 bits
+        ori 0x80    ;and then OR the 7th bit
+        mov  b,a
+        lxi  h,flL
+        mov  c,m
+        xchg        ;Get data back from DE and put it in HL
+        dad  b      ;add BC to HL
+        ret
+
+;Get memory required for column and line count. Returns it in HL
 gmem:   lxi  h,lcnt     ;Get line count
         mov  c,m        ;move it to BC
+        mvi  b,0x00     ;clear B
         lxi  h,ccnt     ;Get column count
         mov  a,m        ;move it to A
-        adi  0x03       ;Add 3 bytes
+        adi  0x03       ;Add 3 bytes to column count
+        mov  d,a        ;move it to D
         call mult
         ret
 
-;16 bit int multiply C * D = HL
-mult:   mvi  b,0x00     ;Clear B
-        lxi  h,0x00     ;Clear H
-        dad  b          ;add BC to HL
+;8bit to 16 bit unsigned int multiply BC * D = HL
+mult:   lxi  h,0x00     ;Clear H
+        mov  a,d        ;check to see if D is 0
+        ana  a          ;check if zero
+        rz
+multl:  dad  b          ;add BC to HL
         dcr  d          ;decrease d
-        jnz  mult       ;loop until d is 0
+        jnz  multl      ;loop until d is 0
         ret
 
-;Text to display input.
-ftext:  mov  b,a
-
+;#########################################################################################################################
+;#########################################################################################################################
+;#########################################################################################################################
+;#########################################################################################################################
 ;Display IRQ routine
 ;reg BC will be address of current working line number.
 disp:   push PSW
