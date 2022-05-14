@@ -10,7 +10,12 @@ ccnt    equ 0x8FFA      ;Column count setting.
 wlU     equ 0x8FF9      ;Current displaying line number address Upper.
 wlL     equ 0x8FF8      ;Current displaying line number address Lower.
 lcnt    equ 0x8FF7      ;Line count setting.
-stack   equ 0x8FF6      ;Stack pointer
+timer1  equ 0x8FF6      ;Timer byte.
+timer2  equ 0x8FF5      ;Timer byte.
+blnkr   equ 0x8FF4      ;Timing for blinking text and cursor.
+blnkbt  equ 0x8FF3      ;Byte to look at for blinking text and cursor, and maybe a clock in the future.
+fbnkbt  equ 0x8FF2      ;Fast blinking bits.
+stack   equ 0x8FF1      ;Stack pointer
 bgnadr  equ 0x8000      ;Beginning address of ram
 
 org 0x0800
@@ -79,42 +84,46 @@ init:   lxi sp,stack    ;Load stack pointer
     ;Configure additional port attributes
     mvi a,0x00  ;Use external timer for BAUD
     out 0x3E
-
-;Copy the third rom to video memory, and configure first line of text.
-;0x1000 through 0x17FF is the third ROM. We are going to copy text/data from that to ram.
-    lxi h,0x1000    ;Start of 3rd ROM
-    lxi d,0x8050    ;Start of memory to copy to.
-cpy: mov a,m
-    xchg
-    mov m,a
-    xchg
-    inx h
-    inx d
-    mov a,h
-    cpi 0x17
-    jnz cpy
-    mov a,l
-    cpi 0xFF
-    jnz cpy
 ;Initialize display.
-    lxi h,lcnt      ;22 lines
-    mvi m,0x16
-    lxi h,ccnt      ;80 column
-    mvi m,0x50      ;Use actual address
-    lxi h,flU
-    mvi m,0xA0
-    lxi h,flL
-    mvi m,0x50
-    call cls    ;clear screen
+        lxi h,lcnt      ;24 lines
+        mvi m,0x18
+        lxi h,ccnt      ;80 column
+        mvi m,0x50      ;Use actual address
+        lxi h,flU       ;set start of display buffer
+        mvi m,0xA0
+        lxi h,flL
+        mvi m,0x50
+        call cls    ;clear screen
+        ;Configure IRQ's
+        mvi a,0x0B  ;only enable IRQ 7.5 for now.
+        sim
+        EI          ;enable IRQ's
+;Copy the third rom's text to video memory until we hit a null char.
+;0x1000 through 0x17FF is the third ROM. We are going to copy text/data from that to ram.
+        lxi h,0x1000    ;Start of 3rd ROM
+cpy:    mov a,m
+        call ftext
+        inx h
+        mov a,m
+        cpi 0x00
+        jnz cpy
+;now wait a few seconds before continuing so to give the ascii art time to display.
+        mvi b,0x02
+wait:   lxi h,timer1
+        mvi m,0xF0
+wt:     mov a,m
+        cpi 0x00
+        jnz wt
+        mov a,b
+        cpi 0x00
+        jz  wdne
+        dcr b
+        jmp wait
 ;Reconfigure memory space
-    lxi h,stack     ;Reset the stack to our choosing.
+wdne: lxi h,stack     ;Reset the stack to our choosing.
     lxi d,stack     ;Set DE to stack address as well.
     SPHL
     lxi b,bgnadr    ;Set the beginning address to our choosing.
-;Configure IRQ's
-    mvi a,0x0B  ;only enable IRQ 7.5 for now.
-    sim
-    EI          ;enable IRQ's
 ;Jump back to main program.
 	jmp 0x0194      ;Jump back to main program and continue.
 
@@ -147,9 +156,12 @@ RX: in  0x01    ;Get status
 
 ;#########################################################################################################################
 ;Text to display input.
-ftext:  mov  b,a        ;get data stored in A and move it to B
+ftext:  push b
+        push d
+        push h
+        mov  b,a        ;get data stored in A and move it to B
         cpi  0x0A       ;Check for new line char.
-        jz   nxtlne     ;If new line, make a new line!
+        jz   newlne     ;If new line, make a new line!
         cpi  0x0D       ;Check for return char.
         jz   rtrn       ;If return char, reset cursor to 0x01!
         cpi  0x08       ;Check for backspace.
@@ -174,10 +186,36 @@ ftext:  mov  b,a        ;get data stored in A and move it to B
         mov  m,b        ;store it in memory where the cursor is pointing to
         lxi  h,curs     ;get cursor position
         inr  m          ;increase cursor position by one.
-        mov  a,b        ;put B back into A for any other inline routines following this one that needs it.
+fmtdon: pop h
+        pop d
+        pop b
+        mov a,b
         ret
+
 ;Next line of text to print
-nxtlne: lxi  h,lcnt     ;get total line count
+nxtlne: call lnechk     ;Check to see if we are on the last line.
+        lxi  h,curs     ;get cursor
+        mvi  m,0x01     ;reset it to one
+        call slnt       ;setup next line of text
+        ret
+;Newline feed
+newlne: call lnechk     ;Check to see if we are on the last line.
+        call slnt       ;setup next line of text
+        jmp  fmtdon
+;Return
+rtrn:   lxi  h,curs     ;get cursor
+        mvi  m,0x01     ;reset it to one
+        jmp  fmtdon
+;Backspace.
+bkspc:  lxi  h,curs     ;get cursor
+        mov  a,m        ;move it to A for comparison
+        cpi  0x01
+        rz              ;if it's already at 1, then just return
+        dcr  m          ;otherwise decrease it by 1
+        jmp  fmtdon
+
+;New line check
+lnechk: lxi  h,lcnt     ;get total line count
         mov  a,m        ;move it to A for a compare
         lxi  h,lnmb     ;get working line number
         cmp  m          ;compare it
@@ -186,23 +224,9 @@ nxtlne: lxi  h,lcnt     ;get total line count
         mvi  m,0x00     ;Set it to not be the last line.
         lxi  h,lnmb     ;get working line number
         inr  m          ;increase line number by one
-        lxi  h,curs     ;get cursor
-        mvi  m,0x01     ;reset it to one
-        call slnt       ;setup next line of text
         ret
 maxlne: lxi  h,lnmb     ;reset line number. Then increase the start address by one line, and set the last line to loop back.
         mvi  m,0x00
-        ret
-
-rtrn:   lxi  h,curs     ;get cursor
-        mvi  m,0x01     ;reset it to one
-        ret
-
-bkspc:  lxi  h,curs     ;get cursor
-        mov  a,m        ;move it to A for comparison
-        cpi  0x01
-        rz              ;if it's already at 1, then just return
-        dcr  m          ;otherwise decrease it by 1
         ret
 
 ;Clear screen and buffer.
@@ -379,4 +403,31 @@ blank:  lxi h,flU   ;get address of first line.
         lxi h,flL
         mov c,m
         mov e,m     ;move the lower 8 bits to e
+        ;Generic timing stuff not directly related to the screen.
+        lxi h,timer1    ;Timer 1
+        mov a,m
+        cpi 0x00
+        cnz  t1dec
+        lxi h,timer2    ;Timer 2
+        mov a,m
+        cpi 0x00
+        cnz  t2dec
+        ;Timing for blinking stuff and maybe a clock in the future.
+        lxi h,fbnkbt    ;For fast blinking and strobing.
+        inr m
+        lxi h,blnkr     ;Slower Blinker
+        mov a,m
+        cpi 0x00
+        jnz  blnktm
+        mvi m,0x0F      ;~250ms timing.
+        lxi h,blnkbt    ;increase blinking byte. Gives 250ms, 500ms, 1S, 2S, etc. timings.
+        inr m           ;increase blnkbt and let it roll over.
+        ret
+blnktm: dcr m
+        ret
+
+t1dec:  dcr m
+        ret
+
+t2dec:  dcr m
         ret
