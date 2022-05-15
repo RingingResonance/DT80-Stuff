@@ -4,8 +4,8 @@
 curs    equ 0x8FFF      ;Cursor position.
 ccfg    equ 0x8FFE      ;Cursor config.
 lnmb    equ 0x8FFD      ;Current working line.
-flU     equ 0x8FFC      ;First Line address Upper.
-flL     equ 0x8FFB      ;First Line address Lower.
+flU     equ 0x8FFC      ;First Line address pointer Upper.
+flL     equ 0x8FFB      ;First Line address pointer Lower.
 ccnt    equ 0x8FFA      ;Column count setting.
 wlU     equ 0x8FF9      ;Current displaying line number address Upper.
 wlL     equ 0x8FF8      ;Current displaying line number address Lower.
@@ -15,8 +15,12 @@ timer2  equ 0x8FF5      ;Timer byte.
 blnkr   equ 0x8FF4      ;Timing for blinking text and cursor.
 blnkbt  equ 0x8FF3      ;Byte to look at for blinking text and cursor, and maybe a clock in the future.
 fbnkbt  equ 0x8FF2      ;Fast blinking bits.
-stack   equ 0x8FF1      ;Stack pointer
+pgln    equ 0x8FF1      ;Page total number of lines
+stack   equ 0x8FF0      ;Stack pointer
 bgnadr  equ 0x8000      ;Beginning address of ram
+;Constants
+flMU    equ 0xA0        ;Starting point of text. Upper
+flML    equ 0x50        ;Starting point of text. Lower
 
 org 0x0800
 	hlt         ;Init marker
@@ -42,7 +46,7 @@ org 0x0815
 	jmp  disp  ;IRQ 7.5
 
 init:   lxi sp,stack    ;Load stack pointer
-    mvi a,0x05  ;Turn down brightness of CRT
+    mvi a,0x02  ;Turn down brightness of CRT
 	out 0x3A
 	mvi a,0x48  ;Initialize video processor clock and config.
 	out 0x3F
@@ -85,14 +89,10 @@ init:   lxi sp,stack    ;Load stack pointer
     mvi a,0x00  ;Use external timer for BAUD
     out 0x3E
 ;Initialize display.
-        lxi h,lcnt      ;24 lines
-        mvi m,0x18
+        lxi h,lcnt      ;22 lines
+        mvi m,0x16
         lxi h,ccnt      ;80 column
         mvi m,0x50      ;Use actual address
-        lxi h,flU       ;set start of display buffer
-        mvi m,0xA0
-        lxi h,flL
-        mvi m,0x50
         call cls    ;clear screen
         ;Configure IRQ's
         mvi a,0x0B  ;only enable IRQ 7.5 for now.
@@ -193,7 +193,7 @@ fmtdon: pop h
         ret
 
 ;Next line of text to print
-nxtlne: call lnechk     ;Check to see if we are on the last line.
+nxtlne: call lnechk     ;Check to see if we are on the last line and if we need to scroll.
         lxi  h,curs     ;get cursor
         mvi  m,0x01     ;reset it to one
         call slnt       ;setup next line of text
@@ -214,32 +214,84 @@ bkspc:  lxi  h,curs     ;get cursor
         dcr  m          ;otherwise decrease it by 1
         jmp  fmtdon
 
-;New line check
-lnechk: lxi  h,lcnt     ;get total line count
+;New line check. Check if we need to scroll when making a new line.
+lnechk: lxi  h,lcnt     ;get max total line count
         mov  a,m        ;move it to A for a compare
         lxi  h,lnmb     ;get working line number
+        inr  m          ;increase line number by one
         cmp  m          ;compare it
         cz   maxlne     ;if we've reached the max number of lines then jump here.
-        call gliadr     ;Get current line start address
-        mvi  m,0x00     ;Set it to not be the last line.
-        lxi  h,lnmb     ;get working line number
-        inr  m          ;increase line number by one
+        ;Check to see if page is filled. If it is then scroll upwards.
+        lxi  h,lcnt     ;Get max total line count.
+        mov  a,m        ;move it to A for a compare
+        dcr  a          ;decrease A by one
+        lxi  h,pgln     ;get total number of lines on this page.
+        cmp  m          ;compare it
+        jz   scrll      ;Scroll page if max number of lines has been reached.
+        inr  m          ;increase line count for page.
         ret
-maxlne: lxi  h,lnmb     ;reset line number. Then increase the start address by one line, and set the last line to loop back.
+        ;reset line number.
+maxlne: lxi  h,lnmb
         mvi  m,0x00
         ret
+        ;scroll page, increase the start address by one line, and set the last line to loop back.
+        ;if start address is greater than the last line reset it back to the first.
+scrll:  call clrlne     ;clear current working line.
+        lxi  h,lcnt     ;get max total line count
+        mov  a,m        ;move it to A for a compare
+        lxi  h,lnmb     ;get working line number
+        inr  m          ;increase working line number by 1
+        cmp  m          ;compare it
+        jz   eotl       ;jump to end of the line
+        ;If not the end of the line, use line count to calculate next first line pointer address.
+        call gliadr     ;Get working line number address.
+        xchg            ;store it in DE for a moment
+        lxi  h,flU      ;get first line pointer
+        mov  m,d        ;store new first line.
+        lxi  h,flL
+        mov  m,e
+        lxi  h,lnmb
+        dcr  m          ;decrease working line number by 1
+        ret
+        ;end of the line, reset first line pointer
+eotl:   dcr  m
+        lxi  h,flU      ;get first line pointer
+        mvi  m,flMU        ;store new first line.
+        lxi  h,flL
+        mvi  m,flML
+        ret
+;clear the current line by filling it with spaces
+clrlne: call gliadr     ;get working line address. Returns it in HL
+        mvi  c,0x01     ;set C to 0x01
+        mov  d,h
+        mov  e,l
+        inx  d          ;DE is now cursor pointer address
+clrfil: mov  h,d        ;Get address pointer back from DE
+        mov  l,e
+        mvi  m,0x20     ;Fill with spaces
+        inx  d
+        lxi  h,ccnt     ;get total column count setting
+        mov  a,m
+        cmp  c          ;compare C and A
+        rz              ;return if they are the same
+        inr  c
+        jmp  clrfil
 
 ;Clear screen and buffer.
-cls:    call gmem   ;get memory needed for a full page, returns it in HL
+cls:    lxi h,flU       ;set start of display buffer
+        mvi m,flMU
+        lxi h,flL
+        mvi m,flML
+        lxi h,pgln     ;get total number of lines on this page.
+        mvi m,0x00
+        call gmem   ;get memory needed for a full page, returns it in HL
         mov  b,h    ;copy HL to BC
         mov  c,l    ;BC contains the total amount of memory needed.
-        lxi  h,flU  ;get address of first line
-        mov  a,m
+        mvi  a,flMU
         ani 0x0F    ;remove the upper 4 config bits
         ori 0x80    ;and then OR the 8th bit
         mov  d,a
-        lxi  h,flL
-        mov  e,m
+        mvi  e,flML
         mov  h,d    ;HL and DE now contains the starting address.
         mov  l,e
         dad  b      ;add BC to HL to get ending address of page. HL now contains ending address
@@ -266,7 +318,7 @@ kflin:  inx  h
 ;#########################################################################################################################
 ;Setup next line of text.
 slnt:   call gliadr  ;Get working line start address, returns it in HL
-        mvi  m,0x40 ;Set attributes for this line, and for next line of text to be the last line.
+        mvi  m,0x00 ;Set attributes for this line, and for next line of text to be the last line.
         xchg        ;Now put start address in DE
         ;Get column count and add it to HL
         lxi  h,ccnt
@@ -275,11 +327,20 @@ slnt:   call gliadr  ;Get working line start address, returns it in HL
         xchg        ;get HL back from DE, as it contains the start address of the working line.
         dad  b      ;add BC to HL, now it contains the line end address
         inx  h      ;Increase HL by 1 to get past end of line. HL is now pointing to the Upper next line Address
+        ;Now check if our working line is the last line. If it is then we need to point the next line to the first memory address.
+        xchg        ;save HL for later without using stack
+        lxi  h,lcnt     ;get total line count
+        mov  a,m        ;move it to A for a compare
+        dcr  a          ;Decrease A by 1
+        lxi  h,lnmb     ;get working line number
+        cmp  m          ;compare it
+        jz   wrplne     ;jump to wrap line routine.
+        xchg
         mov  d,h    ;Make a copy of HL for later use.
         mov  e,l
         inx  h      ;Make HL contain the address of the next line.
         inx  h
-        mvi  m,0x40 ;Set default for this line to be the last line.
+        mvi  m,0x00 ;Set default for this line to be the last line.
         xchg        ;Get the working line next address's address back.
         mov  a,d    ;Now move DE to the next line address spot in memory, but use the default line settings.
         ani 0x0F    ;remove the first 4 bits
@@ -287,6 +348,12 @@ slnt:   call gliadr  ;Get working line start address, returns it in HL
         mov  m,a
         inx  h
         mov  m,e
+        ret
+        ;Make last line point to first memory address containing text info.
+wrplne: xchg        ;Get HL back.
+        mvi  m,flMU
+        inx  h
+        mvi  m,flML
         ret
 
 ;Get line start address of current working line. Returns it in HL
@@ -299,13 +366,11 @@ gliadr: lxi  h,ccnt ;get column count and put it in A
         mov  d,m
         call mult   ;Multiply the two, returns the result in HL.
         xchg        ;Move HL to DE
-        lxi  h,flU  ;Get start address
-        mov  a,m
+        mvi  a,flMU
         ani 0x0F    ;remove the first 4 bits
         ori 0x80    ;and then OR the 7th bit
         mov  b,a
-        lxi  h,flL
-        mov  c,m
+        mvi  c,flML
         xchg        ;Get data back from DE and put it in HL
         dad  b      ;add BC to HL
         ret
@@ -348,11 +413,11 @@ disp:   push PSW
         in  0x32    ;Check for blanking signal.
         ani 0x01
         cz  blank   ;If zero then display is blanking.
-        mov h,d     ;Check for last line.
-        mov l,e
-        mov a,m
-        ani 0x40
-        jnz  lline   ;If 1 then it is last line.
+;        mov h,d     ;Check for last line.
+;        mov l,e
+;        mov a,m
+;        ani 0x40
+;        jnz  lline   ;If 1 then it is last line.
         mov  a,b
         out  0x3C
         mov  a,c
@@ -371,9 +436,9 @@ done:   lxi h,wlU   ;Save working line number.
 
 ;Put BC into the last line reg's
 lline:  mov  a,b
-        out  0x3C
+        out  0x1f
         mov  a,c
-        out  0x3B
+        out  0x20
         call nxtadr ;get the next line's address.
         jmp  done
 
@@ -403,7 +468,7 @@ blank:  lxi h,flU   ;get address of first line.
         lxi h,flL
         mov c,m
         mov e,m     ;move the lower 8 bits to e
-        ;Generic timing stuff not directly related to the screen.
+        ;Generic timer stuff not directly related to the screen.
         lxi h,timer1    ;Timer 1
         mov a,m
         cpi 0x00
@@ -413,7 +478,7 @@ blank:  lxi h,flU   ;get address of first line.
         cpi 0x00
         cnz  t2dec
         ;Timing for blinking stuff and maybe a clock in the future.
-        lxi h,fbnkbt    ;For fast blinking and strobing.
+        lxi h,fbnkbt    ;For fast blinking and strobing at refresh rate.
         inr m
         lxi h,blnkr     ;Slower Blinker
         mov a,m
