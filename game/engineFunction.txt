@@ -1,0 +1,25 @@
+The board renderer starts by looking at the board memory block as pointed to by the two variables 'brdU' and 'brdL'. This part of memory contains the tiles and their location; only three bytes are used here. char, X, Y
+
+Each tile has serveral attributes that are located in a seperate block of memory whos start address is pointed to by the two variables 'tilatrU' and 'tilatrL'. Each tile is marked and ID'ed by it's first char pointer.
+
+The tile attributes block of ram, or ROM, contains information such as, but not limited to:
+
+> Tile character start. 1 byte
+
+> Tile dimensions to render. 1 byte, 4 bits for X and Y each
+
+> Game logic attributes. 1 byte
+
+And more can be added if needed. Example:
+
+> Number of chars used and number of animation frames. 1 byte, four bits each.
+
+> Animation frame delay in 1/60th of a second intervals.
+
+Additionally, there can be live data.
+
+> Animation timer. 1 byte
+
+> Animation frame number. 1 byte
+
+And finally, a Null char to mark the end as some tiles do not contain all of this information and only the bare minimum is nessasary.
