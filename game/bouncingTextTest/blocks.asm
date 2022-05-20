@@ -24,10 +24,10 @@ tilatrU equ 0x8FEE      ;Tile attribute Upper address start pointer
 tilatrL equ 0x8FED      ;Tile attribute Lower address start pointer
 tilactU equ 0x8FEC      ;Tile active data Upper address start pointer
 tilactL equ 0x8FEB      ;Tile active data Lower address start pointer
-dimens  equ 0x8FEA      ;X dimensions of char and number of chars used for a tile
-plX     equ 0x8FE9      ;X coordinates to place a char in a tile
-plY     equ 0x8FE8      ;Y coordinates to place a char in a tile
-
+X       equ 0x8FEA
+Y       equ 0x8FE9
+xyDir   equ 0x8FE8
+rchar   equ 0x8FE7
 ;Stack pointer
 stack   equ 0x8FE6      ;Stack pointer start
 bgnadr  equ 0x8000      ;Beginning address of ram
@@ -114,88 +114,80 @@ init:   lxi sp,stack    ;Load stack pointer
         EI          ;enable IRQ's
 ;#########################################################################################################################
 ;Main program stuff.
-
-;Draw play field
-pfdrw:  lxi h,brdU  ;Get start address of board layout
-        mov d,m
-        lxi h,brdL
-        mov e,m
-        xchg        ;put it in HL
-        ;Draw loop
-kdr:    mov a,m     ;get data and put it in A and B
-        cpi 0x00
-        rz          ;If null char then we are done.
-        mov b,a     ;get data and put it in A and B
-        inx h
-        mov d,m     ;get X data
-        inx h
-        mov e,m     ;get Y data
-        lxi h,plX     ;Store X data
-        mov m,e
-        lxi h,plY     ;Store Y data
-        mov m,d
-        inx h
-        ;look in tile attributes for this char
-        call attrib
-        xchg        ;save HL to DE for a moment
-        lxi  h,dimens   ;get dimensions
-        mov  a,m        ;move to A for bitwise operations to extract data
-        ani  0x0F
-        mov  c,a        ;store char count in C
-        mov  a,m
-        ani  0xF0       ;Get Tile length
-        rrc
-        rrc
-        rrc
-        rrc
-        mov  b,a        ;Store it in B
-        mov  a,c        ;B is X, and C is char count
-        cpi  0x00
-        rz              ;If no more chars left to place in tile then return.
-        ;If we still have chars left to place then place them
-left off here
-
-;get tile attributes if it has any
-attrib: push h
-        lxi h,tilatrU
-        mov d,m
-        lxi h,tilatrL
-        mov e,m
-        xchg        ;get attributes first address pointer
-tfind:  mov a,b     ;get tile back from B
-        cmp m       ;compare the two
-        jz  thatr   ;Tile Has Attributes, get them
-        ;Keep looking for tile attributes
-alook:  inx h
-        mov a,m     ;get next byte
-        cpi 0x00    ;if 0 then it's the end of an attribute
-        jnz alook
-        inx h       ;index HL by one more and see if it's another 0 marking the end of attributes
+;Ball test
+        lxi h,X
+        mvi m,0x05
+        lxi h,Y
+        mvi m,0x08
+ball:   lxi h,rchar
         mov a,m
-        cpi 0x00
-        jz  noatrb  ;no attribute found for this tile, only use coordinates to place single char tile.
-        jmp tfind   ;Compare tile's first byte with tile we are looking for
-
-;no attributes to tile
-noatrb: lxi h,dimens
-        mvi m,0x00
-        pop  h
-        ret
-
-;Tile has attributes
-thatr:  inx h
+        inr m
+        lxi h,X
+        mov c,m
+        lxi h,Y
+        mov b,m
+        call draw
+        lxi h,xyDir ;now check directions. 1 is up, 0 is down
         mov a,m
-        lxi h,dimens
+        ani 0x01    ;get X direction
+        jz  xDown
+        jmp xUp
+ytst:   lxi h,xyDir ;now check directions. 1 is up, 0 is down
+        mov a,m
+        ani 0x02    ;get X direction
+        jz  yDown
+        jmp yUp
+
+xDown:  lxi h,X     ;get X position
+        dcr m       ;decrease X
+        mov a,m     ;move it to A for compare
+        cpi 0x00
+        jnz ytst
+        lxi h,xyDir ;if zero then flip the direction bit to a 1
+        mov a,m
+        ori 0x01
         mov m,a
-        pop  h
-        ret
+        jmp ytst
+
+xUp:    lxi h,X     ;get X position
+        inr m       ;increase X
+        mov a,m     ;move it to A for compare
+        cpi 0x4F
+        jnz ytst
+        lxi h,xyDir ;if zero then flip the direction bit to a 1
+        mov a,m
+        ani 0xFE
+        mov m,a
+        jmp ytst
+
+yDown:  lxi h,Y     ;get Y position
+        dcr m       ;decrease Y
+        mov a,m     ;move it to A for compare
+        cpi 0x00
+        jnz wait
+        lxi h,xyDir ;if zero then flip the direction bit to a 1
+        mov a,m
+        ori 0x02
+        mov m,a
+        jmp wait
+
+yUp:    lxi h,Y     ;get Y position
+        inr m       ;increase Y
+        mov a,m     ;move it to A for compare
+        cpi 0x16
+        jnz wait
+        lxi h,xyDir ;if zero then flip the direction bit to a 1
+        mov a,m
+        ani 0xFD
+        mov m,a
+        jmp wait
+
+wait:   jmp ball
 
 ;#########################################################################################################################
 ;Draws what is specified in the CPU reg's on the screen using block attribute data.
 ;A is the char to draw, BC is the Y and X location to draw it.
-draw:   push b
-        push d
-        lxi  h,lnmb     ;Move B to line number, it is our Y. Positive is DOWN
+draw:   lxi  h,lnmb     ;Move B to line number, it is our Y. Positive is DOWN
         mov  m,b
         mov  d,a
         call gliadr     ;Get the address of that line, returns it in HL
@@ -203,8 +195,6 @@ draw:   push b
         inx  B          ;increase B by one
         dad  b          ;Add BC to HL, this is now the pointer used to write the data to display memory
         mov  m,d        ;write the char to display.
-        pop  d
-        pop  b
         ret
 
 ;Clear screen and buffer.
