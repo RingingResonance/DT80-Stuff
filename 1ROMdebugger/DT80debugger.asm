@@ -50,13 +50,8 @@ ccnt    equ 0x8FFA      ;Column count setting.
 wlU     equ 0x8FF9      ;Current displaying line number address Upper.
 wlL     equ 0x8FF8      ;Current displaying line number address Lower.
 lcnt    equ 0x8FF7      ;Line count setting.
-timer1  equ 0x8FF6      ;Timer byte.
-timer2  equ 0x8FF5      ;Timer byte.
-blnkr   equ 0x8FF4      ;Timing for blinking text and cursor.
-blnkbt  equ 0x8FF3      ;Byte to look at for blinking text and cursor, and maybe a clock in the future.
-fbnkbt  equ 0x8FF2      ;Fast blinking bits.
-pgln    equ 0x8FF1      ;Page total number of lines
-stack   equ 0x8FF0      ;Stack pointer
+pgln    equ 0x8FF6      ;Page total number of lines
+stack   equ 0x8FF5      ;Stack pointer
 bgnadr  equ 0x8000      ;Beginning address of ram
 ;Constants
 flMU    equ 0xA0        ;Starting point of text. Upper
