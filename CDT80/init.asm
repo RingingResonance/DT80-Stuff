@@ -160,6 +160,9 @@ ftext:  push b
         push d
         push h
         mov  b,a        ;get data stored in A and move it to B
+        cpi  0x09       ;Check for new tab char.
+        jz   tab        ;If new line, increase cursor position by 5 spaces!
+        mov  b,a        ;get data stored in A and move it to B
         cpi  0x0A       ;Check for new line char.
         jz   newlne     ;If new line, make a new line!
         cpi  0x0D       ;Check for return char.
@@ -210,8 +213,18 @@ rtrn:   lxi  h,curs     ;get cursor
 bkspc:  lxi  h,curs     ;get cursor
         mov  a,m        ;move it to A for comparison
         cpi  0x01
-        rz              ;if it's already at 1, then just return
+        jz   fmtdon     ;if it's already at 1, then don't do anything
         dcr  m          ;otherwise decrease it by 1
+        jmp  fmtdon
+;Tab
+tab:    lxi  h,curs     ;get cursor
+        mov  a,m        ;move it to A for comparison
+        adi  0x05       ;add 5
+        lxi  h,ccnt
+        cmp  m
+        jz   fmtdon     ;if it goes beyond the end of the line do not continue to add.
+        lxi  h,curs     ;get cursor
+        mov  m,a        ;If not beyond column count, add to cursor.
         jmp  fmtdon
 
 ;New line check. Check if we need to scroll when making a new line.
@@ -478,7 +491,7 @@ blank:  lxi h,flU   ;get address of first line.
         cpi 0x00
         cnz  t2dec
         ;Timing for blinking stuff and maybe a clock in the future.
-        lxi h,fbnkbt    ;For fast blinking and strobing at refresh rate.
+        lxi h,fbnkbt    ;For fast blinking, strobing, and animations at refresh rate and it's multiples
         inr m
         lxi h,blnkr     ;Slower Blinker
         mov a,m
