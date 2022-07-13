@@ -1,16 +1,15 @@
 
 ; Segment type:	Pure code
 
-sub_0:
-
-; FUNCTION CHUNK AT 0540 SIZE 00000009 BYTES
+start:
 
 di
 lxi	sp, 9000h
 mvi	a, 1Fh
 jmp	loc_540
-; End of function sub_0
+; End of function start
 
+;Does anything even call this???
 xra	a
 sta	8DFAh
 call	sub_268B
@@ -28,31 +27,26 @@ out	3Fh
 mov	a, d
 push	d
 jmp	loc_8B8
+
+; IRQ 5.5, TX Data Ready + Keyboard?
 nop
 push	psw
 jmp	loc_3AA
 
 
-
-sub_30:
-
-; FUNCTION CHUNK AT 04CE SIZE 00000072 BYTES
-
+; IRQ 6.5, RX Data Ready
+RST65:
 nop
 nop
 nop
 nop
 push	psw
 jmp	loc_4CE
-; End of function sub_30
+; End of function RST65
 
 
-
-
-sub_38:
-
-; FUNCTION CHUNK AT 020D SIZE 0000001B BYTES
-
+; IRQ 7.5, Display Line Pointer Update Routine
+RST75:
 nop
 nop
 nop
@@ -290,7 +284,7 @@ adi	2
 cmp	l
 jz	loc_AC
 jmp	loc_11A
-; End of function sub_38
+; End of function RST75
 
 
 
@@ -366,7 +360,7 @@ xchg
 jmp	loc_1E5
 ; End of function sub_1B7
 
-; START	OF FUNCTION CHUNK FOR sub_38
+; START	OF FUNCTION CHUNK FOR RST75
 
 loc_20D:
 lda	8D4Fh
@@ -387,7 +381,7 @@ mov	a, m
 ani	0BFh
 mov	m, a
 jmp	loc_11A
-; END OF FUNCTION CHUNK	FOR sub_38
+; END OF FUNCTION CHUNK	FOR RST75
 
 
 
@@ -820,7 +814,7 @@ out	1
 ret
 ; End of function sub_4B5
 
-; START	OF FUNCTION CHUNK FOR sub_30
+; START	OF FUNCTION CHUNK FOR RST65
 
 loc_4CE:
 push	h
@@ -887,15 +881,15 @@ ori	10h
 out	1
 mvi	a, 7Fh ; ''
 jmp	loc_4F3
-; END OF FUNCTION CHUNK	FOR sub_30
-; START	OF FUNCTION CHUNK FOR sub_0
+; END OF FUNCTION CHUNK	FOR RST65
+; START	OF FUNCTION CHUNK FOR start
 
 loc_540:
 out	3Ah
 call	sub_5CC
 mov	d, a
 jmp	loc_7AE
-; END OF FUNCTION CHUNK	FOR sub_0
+; END OF FUNCTION CHUNK	FOR start
 ; START	OF FUNCTION CHUNK FOR sub_772
 
 loc_549:
