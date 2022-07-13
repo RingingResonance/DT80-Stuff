@@ -1,0 +1,1 @@
+I've read it again this time after wire brushing the legs and reading at lower voltages. Each read results in a different checksum.
