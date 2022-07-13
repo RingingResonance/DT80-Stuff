@@ -1,0 +1,3 @@
+I've read the ROMs two different ways; With my TL-866 and also by placing the ROMs in my DT80 and reading them with my own program through the serial port. All ROMs match except for ROM#1
+
+Therfore, I will attempt to read #1 more than once. I think it might have a small amount of corrosion on the legs. It's the only ROM without gold plating on the legs. I will clean it and then read it in a different socket on the DT80.
