@@ -1,1 +1,1 @@
-This is the ROMs as they are directly read from the DT80.
+This is the ROMs as they are directly read from the DT80 using a custom program to dump their contents through the serial port.

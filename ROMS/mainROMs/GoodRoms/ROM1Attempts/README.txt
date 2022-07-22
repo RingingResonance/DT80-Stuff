@@ -1,1 +1,1 @@
-I've read it again this time after wire brushing the legs and reading at lower voltages. Each read results in a different checksum.
+I've read it again this time after wire brushing the legs and reading at lower voltages. Each read results in a different checksum on ROM1. After cleaning and useing a second ZIF socket between the TL-866 and the ROM chips I was able to get a consistant read that matches the data read directly from the terminal.
