@@ -20,3 +20,5 @@ https://www.youtube.com/watch?v=23zrD_eBGzU&list=PLwSyG2RzSC1Ws-bqocjMjpOM1eAAWK
 
 Roms are toast, but I've included them anyways. I fixed the char rom, but the firmware roms are still toast. Until I can find a copy of the originals, I will have to
 reverse engineer the terminal and write my own.
+
+Found someone with a terminal and they loaned me the ROMs to read. I've included what I was able to get from them.
