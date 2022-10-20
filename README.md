@@ -22,3 +22,9 @@ Roms are toast, but I've included them anyways. I fixed the char rom, but the fi
 reverse engineer the terminal and write my own.
 
 Found someone with a terminal and they loaned me the ROMs to read. I've included what I was able to get from them.
+
+If you have a DT80 terminal you are trying to debug, the directory "1ROMDEBUGGER" might interest you.
+
+It is a debugger I wrote for the DT80 terminal that only uses one 2K rom chip and has the bare minimum code to get a terminal and text
+
+onto the terminal's display. It does not use the DT80's keyboard. Instead it uses serial port 1 at 9600 8n1.
