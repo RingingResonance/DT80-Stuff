@@ -9,7 +9,7 @@ mvi	a, 1Fh
 jmp	loc_540
 ; End of function start
 
-;Does anything even call this???
+;Does anything even call this or is it part of an IRQ???
 xra	a
 sta	8DFAh
 call	sub_268B
@@ -890,7 +890,7 @@ call	sub_5CC
 mov	d, a
 jmp	loc_7AE
 ; END OF FUNCTION CHUNK	FOR start
-; START	OF FUNCTION CHUNK FOR sub_772
+; START	OF FUNCTION CHUNK FOR memTest
 
 loc_549:
 di
@@ -962,7 +962,7 @@ ei
 call	sub_5D6
 lhld	word_3DCE
 pchl
-; END OF FUNCTION CHUNK	FOR sub_772
+; END OF FUNCTION CHUNK	FOR memTest
 
 
 
@@ -1268,8 +1268,8 @@ ret
 
 
 
-
-sub_772:
+;Some kind of memory test or init.
+memTest:
 
 ; FUNCTION CHUNK AT 0549 SIZE 00000083 BYTES
 ; FUNCTION CHUNK AT 0959 SIZE 00000023 BYTES
@@ -1280,7 +1280,7 @@ dcr	e
 jz	loc_77D
 add	b
 mov	h, a
-jmp	sub_772
+jmp	memTest
 
 loc_77D:
 mov	e, b
@@ -1296,8 +1296,8 @@ loc_787:
 cmp	c
 jnz	loc_793
 dcr	e
-rz
-mov	a, h
+rz              ;Presumably, if mem test passes we return.
+mov	a, h        ;Presumably, otherwise we continue to try printing an error message on screen.
 sub	b
 mov	h, a
 jmp	loc_77E
@@ -1325,25 +1325,26 @@ loc_7AE:
 lxi	h, 8000h
 lxi	b, 4AAh
 mov	e, b
-call	sub_772
+call	memTest
 lxi	h, 9000h
 mvi	c, 5
 mov	e, b
-call	sub_772
+call	memTest
 xra	a
 
 loc_7C2:
 sta	8DFAh
-lxi	sp, 9000h
+lxi	sp, 9000h   ;Text attribute memory start.
 push	d
 mvi	a, 0Fh
 sim
 mvi	a, 0Eh
 
-loc_7CE:
+;This might be where the ROM checksums are checked.
+RCHKSUM:
 push	psw
-lxi	h, 3DD0h
-mvi	d, 0
+lxi	h, 3DD0h    ;It's an address on ROM 8. 0x01D0 on that ROM to be exact. Contains 12 HEX numbers. Presumably two for each ROM.
+mvi	d, 0        ;It might be where the checksums are stored.
 mov	e, a
 dad	d
 mov	a, m
@@ -1357,7 +1358,7 @@ inx	h
 mov	h, m
 mov	l, a
 lxi	b, 0
-lxi	d, 800h
+lxi	d, 800h     ;Start of ROM 2, or maybe just add this to get beginning address for each ROM.
 
 loc_7E9:
 mov	a, m
@@ -1373,7 +1374,7 @@ mov	a, e
 ora	d
 jnz	loc_7E9
 pop	psw
-lxi	h, 3DE0h
+lxi	h, 3DE0h    ;Address 0x01E0 in ROM 8
 mov	e, a
 dad	d
 mov	a, m
@@ -1388,7 +1389,7 @@ mov	a, e
 loc_809:
 dcr	a
 dcr	a
-jp	loc_7CE
+jp	RCHKSUM
 call	sub_13B3
 jnz	loc_84B
 xra	a
@@ -1544,7 +1545,7 @@ jnz	loc_8FF
 call	sub_618
 mvi	e, 1
 jmp	loc_87D
-; End of function sub_772
+; End of function memTest
 
 
 
@@ -1609,7 +1610,7 @@ ora	c
 jmp	loc_93A
 ; End of function sub_953
 
-; START	OF FUNCTION CHUNK FOR sub_772
+; START	OF FUNCTION CHUNK FOR memTest
 
 loc_959:
 xra	a
@@ -1627,7 +1628,7 @@ call	sub_97C
 call	sub_618
 mvi	e, 2
 jmp	loc_87D
-; END OF FUNCTION CHUNK	FOR sub_772
+; END OF FUNCTION CHUNK	FOR memTest
 
 
 
