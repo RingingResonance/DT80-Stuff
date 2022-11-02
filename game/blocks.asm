@@ -1,5 +1,5 @@
 
-;<Cloned DT80 Firmware>
+;<Small Game Engine for the DT80>
 ;Memory organization.
 ;Text writer and clear screen
 curs    equ 0x8FFF      ;Cursor position.
@@ -38,7 +38,7 @@ flML    equ 0x50        ;Starting point of text. Lower
 org 0x0000
     jmp init
 ;# Built in IRQ vectors.
-;org	0x0024		;TRAP
+;org	0x0024		;TRAP Not used in circuit.
 ;    DI
 ;	jmp  irqT
 ;org	0x002C		;RST5.5
@@ -47,7 +47,7 @@ org 0x0000
 ;org	0x0034		;RST6.5
 ;    DI
 ;	jmp  irq6
-org	0x003C		;RST7.5
+org	0x003C		;RST7.5 for horizontal lines.
     DI
 	jmp  disp
 
@@ -115,6 +115,8 @@ init:   lxi sp,stack    ;Load stack pointer
 ;#########################################################################################################################
 ;Main program stuff.
 
+;#########################################################################################################################
+;Engine routines.
 ;Draw play field
 pfdrw:  lxi h,brdU  ;Get start address of board layout
         mov d,m

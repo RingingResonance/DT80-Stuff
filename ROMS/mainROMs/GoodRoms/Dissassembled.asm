@@ -413,7 +413,7 @@ ora	a
 jnz	loc_25B
 lda	8DA1h
 ani	7Fh
-out	38h
+out	38h         ;Keyboard controller.
 
 loc_25B:
 xra	a
@@ -886,17 +886,17 @@ jmp	loc_4F3
 
 loc_540:
 out	3Ah
-call	sub_5CC
+call	kbdSend
 mov	d, a
 jmp	loc_7AE
 ; END OF FUNCTION CHUNK	FOR start
 ; START	OF FUNCTION CHUNK FOR memTest
 
 loc_549:
-di
-lxi	sp, 9000h
-xra	a
-sta	8DA1h
+di              ;Disable IRQs
+lxi	sp, 9000h   ;Index stack pointer to start of attributes memory.
+xra	a           ;clear A
+sta	8DA1h       ;Store a Direct 0x8DA1
 call	sub_662
 
 loc_554:
@@ -945,7 +945,7 @@ mov	m, a
 
 loc_5AF:
 mov	a, m
-out	38h
+out	38h             ;Keyboard controller.
 pop	psw
 jz	loc_5C1
 jp	loc_5BB
@@ -959,69 +959,69 @@ loc_5C1:
 mvi	a, 18h
 sim
 ei
-call	sub_5D6
+call	PORT1flags
 lhld	word_3DCE
 pchl
 ; END OF FUNCTION CHUNK	FOR memTest
 
 
-
-sub_5CC:
-call	sub_5D6
-xra	a
-out	38h
-call	sub_5D6
+;Sends 0x00 to keyboard controller???
+kbdSend:
+call	PORT1flags
+xra	a                   ;This would just send 0x00 to the keyboard.
+out	38h                 ;Keyboard controller.
+call	PORT1flags      ;What does this function even do?
 ret
-; End of function sub_5CC
+; End of function kbdSend
 
 
 
-
-sub_5D6:
+;Possibly a serial port test, or reading data into an input buffer.
+PORT1flags:
 lxi	h, 8D91h
-mov	a, m
-ani	40h
-mov	c, a
-mvi	b, 4
+mov	a, m        ;Read data at mem location 0x8D91 and put in A.
+ani	40h         ;And it with 0x40
+mov	c, a        ;Move it to C
+mvi	b, 4        ;Move 4 to B
 
 loc_5DF:
-lxi	d, 136h
+lxi	d, 136h     ;Load D with 0x0136
 
 loc_5E2:
-dcx	d
-mov	a, e
-ora	d
-jz	loc_609
-rim
-ani	8
-jz	loc_5F8
-mov	a, m
+dcx	d           ;Decrease D
+mov	a, e        ;Move E to A
+ora	d           ;or it with D
+jz	loc_609     ;If result is zero then branch. Skips clearing B down below.
+rim             ;read IRQ mask
+ani	8           ;and it with 0x08 to get that one bit. This checks if IRQ's are enabled or not.
+jz	getPORT1stat     ;If IRQs are disabled then branch.
+mov	a, m        ;Get memory location 0x8D91 again.
 ani	40h
 xra	c
 jnz	loc_607
-jmp	loc_5E2
+jmp	loc_5E2     ;loop
 
-loc_5F8:
-in	31h
-ani	20h
-jz	loc_5E2
-in	30h
-rlc
-cpi	0C0h ; 'À'
-jc	loc_5DF
+getPORT1stat:
+in	31h         ;Read data from chip 87, this is serial port input stuff or status flags.
+ani	20h         ;AND the result with 0x20 to get that one bit. This data is derived from PIN 1 of chip 95
+jz	loc_5E2     ;branch if it's clear.
+in	30h         ;Read data from chip 51, a 74LS21
+rlc             ;rotate left carry
+cpi	0C0h ; 'À'  ;compare it with 0xC0
+jc	loc_5DF     ;Jump if carry bit is set.
 
 loc_607:
-mvi	b, 0
+mvi	b, 0        ;clear B
 
 loc_609:
-di
-lxi	h, 8D40h
-shld	8DA4h
-shld	8DA2h
-xra	a
-sta	8D87h
-ret
-; End of function sub_5D6
+di              ;disable global IRQs
+lxi	h, 8D40h    ;load address 0x8D30 int HL
+shld	8DA4h   ;Store HL direct
+shld	8DA2h   ;Store HL direct
+xra	a           ;clear A
+sta	8D87h       ;clear memory location 0x8D87
+ret             ;return
+; End of function PORT1flags
 
 
 
@@ -1076,11 +1076,8 @@ jmp	loc_E76
 
 
 sub_662:
-call	sub_13B3
+call	VidSet
 ; End of function sub_662
-
-
-
 
 sub_665:
 call	sub_618
@@ -1297,7 +1294,7 @@ cmp	c
 jnz	loc_793
 dcr	e
 rz              ;Presumably, if mem test passes we return.
-mov	a, h        ;Presumably, otherwise we continue to try printing an error message on screen.
+mov	a, h        ;Presumably, otherwise we continue to try printing an error message on screen. I have no idea at this point.
 sub	b
 mov	h, a
 jmp	loc_77E
@@ -1318,7 +1315,7 @@ inr	a
 loc_7A3:
 ori	80h
 sta	8DFAh
-call	sub_5CC
+call	kbdSend     ;Does something with PORT_1 and seems to send 0x00 to IO address 0x38 which might be the keyboard controller.
 jmp	loc_549
 
 loc_7AE:
@@ -1390,7 +1387,7 @@ loc_809:
 dcr	a
 dcr	a
 jp	RCHKSUM
-call	sub_13B3
+call	VidSet
 jnz	loc_84B
 xra	a
 sta	8DEDh
@@ -1401,7 +1398,7 @@ shld	8DC2h
 call	sub_141A
 lxi	h, 0
 shld	8DC2h
-call	sub_13B3
+call	VidSet
 jnz	loc_83E
 lda	8DC2h
 cpi	55h ; 'U'
@@ -1424,28 +1421,30 @@ ori	2
 sta	8DFAh
 lxi	b, 1F06h
 
-loc_856:
+;Some function that turns brightness all the way down and repeatedly sends 0x00 to keyboard controller.
+;Also decreases reg C until it's 0 so it's some kind of timer as well.
+variableDelay:
 push	b
-call	sub_5D6
-pop	b
+call	PORT1flags
+pop	b           ;B is now 0x1F
 mov	a, b
 xri	20h
-mov	b, a
-out	3Ah
-xra	a
-out	38h
+mov	b, a        ;A and B are now both 0x3F
+out	3Ah         ;Controls screen brightness, 3F should turn the brightness all the way down.
+xra	a           ;This makes a 0x00
+out	38h         ;This outputs 0x00 to the keyboard controller.
 lxi	h, 5D00h
 
-loc_867:
+Delay1:
 dcx	h
 mov	a, l
 ora	h
-jnz	loc_867
+jnz	Delay1
 dcr	c
-jnz	loc_856
+jnz	variableDelay
 
 loc_871:
-call	sub_5CC
+call	kbdSend
 lda	8DFAh
 ora	b
 sta	8DFAh
@@ -1484,7 +1483,7 @@ rrc
 jc	loc_549
 
 loc_8AC:
-call	sub_5CC
+call	kbdSend
 call	sub_665
 lxi	sp, 9000h
 jmp	loc_554
@@ -2891,7 +2890,7 @@ mov	b, a
 lda	8DA1h
 ana	b
 di
-out	38h
+out	38h         ;Keyboard controller
 mov	a, c
 ani	7Fh
 sta	8D91h
@@ -3320,11 +3319,11 @@ ret
 
 
 
-
-sub_13B3:
-lda	8DEDh
-ani	0F7h
-out	3Fh
+;Video settings routine? Not sure.
+VidSet:
+lda	8DEDh   ;Load A direct from address 0x8DED
+ani	0F7h    ;And it with 0xF7
+out	3Fh     ;output that data to chip 80. This controls video settings.
 lxi	h, 8DB8h
 lxi	d, 0
 lxi	b, 700h
@@ -3393,7 +3392,7 @@ cmp	e
 
 locret_1414:
 ret
-; End of function sub_13B3
+; End of function VidSet
 
 
 loc_1415:
