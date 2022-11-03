@@ -92,19 +92,154 @@ init: mvi a,0x64  ;Select T1 MSB, TX
     ;Configure additional port attributes
     mvi a,0x00  ;Use external timer for BAUD
     out 0x3E
+
+
+;Do memory check.
+    lxi b,0x0080    ;Use BC for walking bits right
+    lxi d,0x0008    ;1 bit in D indicates a chip failure. E is pass count.
+chagn:  lxi h,0x8000
+        mov  b,c    ;Move C to B
+memld:  mov  m,b    ;Move B to memory location.
+        ;rotate B to the RIGHT.
+        mov  a,b
+        rrc
+        mov  b,a
+        ;Now move to next memory address.
+        mov  a,h
+        cpi  0x8F
+        jnz  notdn
+        mov  a,l
+        cpi  0xFF
+        jnz  notdn
+        jmp  memvr
+notdn:  inx  h
+        jmp  memld
+
+;Now Verify what was written.
+memvr:  lxi h,0x8000
+        mov b,c         ;move C to B again.
+memrd:  ;Check M with B and then rotate B to the RIGHT.
+        mov  a,b
+        xra  m          ;The result is stored in A so we need to get B again.
+        jnz  merror     ;If the result of the XOR isn't zero then we have a problem.
+cntck:  mov  a,b        ;Now rotate B to the right.
+        rrc
+        mov  b,a
+        ;Now move to next memory address.
+        mov  a,h
+        cpi  0x8F
+        jnz  notdnr
+        mov  a,l
+        cpi  0xFF
+        jnz  notdnr
+        jmp  pssdne
+notdnr: inx  h
+        jmp  memrd
+
+;Record that there was an error if there was one.
+;Figure out which chip has a failure from top to bottom.
+merror: mvi  a,0x8B
+        cmp  h      ;if H>A then C=1. else C=0
+        jc   bnk4f
+        mvi  a,0x87
+        cmp  h      ;if H>A then C=1. else C=0
+        jc   bnk3f
+        mvi  a,0x83
+        cmp  h      ;if H>A then C=1. else C=0
+        jc   bnk2f
+        jmp  bnk1f
+
+;Set the pertaining bit in reg D for each memory failure.
+bnk4f:  mov a,d
+        ori 0x10
+        mov d,a
+        jmp cntck   ;continue checking.
+bnk3f:  mov a,d
+        ori 0x20
+        mov d,a
+        jmp cntck   ;continue checking.
+bnk2f:  mov a,d
+        ori 0x40
+        mov d,a
+        jmp cntck   ;continue checking.
+bnk1f:  mov a,d
+        ori 0x80
+        mov d,a
+        jmp cntck   ;continue checking.
+
+;Done with a single pass. Rotate C and decrease E
+pssdne: dcr e
+        jz  memdone     ;If E is 0 then we are done with memory check.
+        mov a,c         ;Rotate C to the right.
+        rrc
+        mov c,a
+        jmp chagn
+
+memdone: nop
+
 ;Initialize display.
         lxi h,lcnt      ;22 lines
         mvi m,0x16
         lxi h,ccnt      ;80 column
         mvi m,0x50      ;Use actual address
+        push d
         call cls    ;clear screen
+        pop  d
         ;Configure IRQ's
         mvi a,0x0B  ;only enable IRQ 7.5 for now.
         sim
         EI          ;enable IRQ's
+;Attempt to display memory error if there was one.
+        mov  a,d
+        ori  0x00
+        jz  sysrdy      ;If no 1's in D then memory test passed.
+        mov a,d
+        ral
+        mov d,a
+        jc   fbnk1      ;Failure detected in this bank.
+        mvi  a,0x50     ;Load the ASCII letter 'P' into A
+        call ftext
+bpnt2:  mov a,d
+        ral
+        mov d,a
+        jc   fbnk2      ;Failure detected in this bank.
+        mvi  a,0x50     ;Load the ASCII letter 'P' into A
+        call ftext
+bpnt3:  mov a,d
+        ral
+        mov d,a
+        jc   fbnk3      ;Failure detected in this bank.
+        mvi  a,0x50     ;Load the ASCII letter 'P' into A
+        call ftext
+bpnt4:  mov a,d
+        ral
+        mov d,a
+        jc   fbnk4      ;Failure detected in this bank.
+        mvi  a,0x50     ;Load the ASCII letter 'P' into A
+        call ftext
+        jmp  errlp
+
+;Print Failures.
+fbnk1:  mvi  a,0x46     ;Load the ASCII letter 'F' into A
+        call ftext
+        jmp  bpnt2
+
+fbnk2:  mvi  a,0x46     ;Load the ASCII letter 'F' into A
+        call ftext
+        jmp  bpnt3
+
+fbnk3:  mvi  a,0x46     ;Load the ASCII letter 'F' into A
+        call ftext
+        jmp  bpnt4
+
+fbnk4:  mvi  a,0x46     ;Load the ASCII letter 'F' into A
+        call ftext
+errlp:  hlt
+        jmp  errlp
+
 ;Copy the third rom's text to video memory until we hit a null char.
 ;0x1000 through 0x17FF is the third ROM. We are going to copy text/data from that to ram.
-        lxi h,0x1000    ;Start of 3rd ROM
+sysrdy: lxi h,0x1000    ;Start of 3rd ROM
 cpy:    mov a,h
         cpi 0x3F
         jnz ssaver
@@ -283,8 +418,8 @@ clrfil: mov  h,d        ;Get address pointer back from DE
 ;Clear screen and buffer.
 cls:    lxi h,flM   ;set start of display buffer
         shld flL
-        lxi h,pgln     ;get total number of lines on this page.
-        mvi m,0x00
+        lxi h,pgln      ;get total number of lines on this page.
+        mvi m,0x00      ;Clear it.
         call gmem   ;get memory needed for a full page, returns it in HL
         mov  b,h    ;copy HL to BC
         mov  c,l    ;BC contains the total amount of memory needed.
@@ -395,36 +530,37 @@ multl:  dad  b          ;add BC to HL
 ;#########################################################################################################################
 ;#########################################################################################################################
 ;Display IRQ routine
-;reg BC will be address of current working line number.
+;reg DE will be address of current working line number.
 disp:   push PSW
         push B
         push D
         push H
-        lhld wlL    ;Get working line number.
-        xchg
+        lhld wlL    ;Get working line number address.
+        xchg        ;Put it in DE
         in  0x32    ;Check for blanking signal.
         ani 0x01
         cz  blank   ;If zero then display is blanking.
+        ;Put working line number into the Video Processor's line pointer.
         mov  a,d
         out  0x3C
         mov  a,e
         out  0x3B
-;Get start address of next line.
-        lxi h,ccnt  ;get column count
-        mov l,m     ;put it in HL
+        ;Get start address of next line.
+        lda ccnt    ;get column count
+        mov l,a     ;put it in L
         mvi h,0x00  ;clear the upper 8 bits of HL
-        mov a,d     ;also copy the upper 8 bits of BC to A for further processing.
+        mov a,d     ;also copy the upper 8 bits of DE to A for further processing.
         ani 0x0F    ;remove the first 4 bits
         ori 0x80    ;and then OR the 7th bit in
-        mov b,a     ;then move it to D
-        mov c,e     ;move the lower 8 bits to e
-        dad b       ;16 bit add with DE and HL to get the ACTUAL address of next line.
-        inx h       ;bump it by 1 to get the correct address
-        mov d,m     ;Copy new address and line config to BC
+        mov b,a     ;then move it to B
+        mov c,e     ;move the lower 8 bits of DE to C
+        dad b       ;16 bit add with BC and HL to get the ACTUAL address of next line.
+        inx h       ;bump it up by 1 to get skip past the line attribute byte.
+        mov d,m     ;Copy new address and line config to DE
         inx h
-        mov e,m     ;move the lower 8 bits to C
-        xchg    ;Save working line number.
-        shld wlL
+        mov e,m     ;move the lower 8 bits to E
+        xchg        ;Move the working line number address to HL
+        shld wlL    ;Store it.
         pop  H      ;Done with IRQ, pop everything off the stack and return.
         pop  D
         pop  B
