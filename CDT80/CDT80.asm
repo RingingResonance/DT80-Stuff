@@ -29,7 +29,7 @@ org 0x0000
 Azero:	mvi  a,0x0F	;Disable IRQs
  	sim
  	lxi sp,stack
- 	mvi a,0x02  ;Turn down brightness of CRT
+ 	mvi a,0xFF  ;Turn down brightness of CRT all the way.
 	out 0x3A
 	mvi a,0x48  ;Initialize video processor clock and config.
 	out 0x3F
@@ -92,7 +92,6 @@ init: mvi a,0x64  ;Select T1 MSB, TX
     ;Configure additional port attributes
     mvi a,0x00  ;Use external timer for BAUD
     out 0x3E
-
 
 ;Do memory check.
     lxi b,0x0080    ;Use BC for walking bits right
@@ -222,8 +221,11 @@ pssdne: dcr e
         mov c,a
         jmp chagn
 
-;Try to find some good memory to put basic text data to show which ram chips were detected failures.
-memdone: mvi  a,0x00
+;If there was a failure, try to find some good memory to put basic text data to show which ram chips were detected failures.
+memdone: mov  a,d
+         ori  0x00
+         jz  sysrdy      ;If no 1's in D then memory test passed continue to system ready.
+         mvi  a,0x00
          out  0x3B
          mov a,d
          ani 0x03
@@ -235,44 +237,47 @@ memdone: mvi  a,0x00
          ani 0x30
          jz  stk3
          jmp  stk4
-stk1:   lxi h,0x8C01
+;Try to put stack somewhere else other than where a detected memory failure is at, this way we can use our TX routine.
+;Also try to start video processor at beginning of good memory bank where we will later put basic text data.
+stk1:   lxi sp,0x8FFF
+        lxi h,0x8C01
         mvi a,0x8C
         out  0x3C
         jmp dinit
-stk2:   lxi h,0x8801
+stk2:   lxi sp,0x8BFF
+        lxi h,0x8801
         mvi a,0x88
         out  0x3C
         jmp dinit
-stk3:   lxi h,0x8401
+stk3:   lxi sp,0x87FF
+        lxi h,0x8401
         mvi a,0x84
         out  0x3C
         jmp dinit
-stk4:   lxi h,0x8001
+stk4:   lxi sp,0x83FF
+        lxi h,0x8001
         mvi a,0x80
         out  0x3C
-        jmp dinit
-
-;Initialize display.
-dinit:  mov  a,d
-        ori  0x00
-        jz  sysrdy      ;If no 1's in D then memory test passed continue to system ready.
         ;Attempt to display memory error if there was one.
         ;Load each bit into carry and test. Do this 8 times.
+dinit:  mvi a,0x08  ;Turn brightness of CRT up to a level that is just visible.
+        out 0x3A
         mvi  e,0x08
 prterr: mov a,d
         ral
         mov d,a
         jc   fbnk       ;Failure detected in this bank. Print 'F'
         mvi  a,0x50     ;Load the ASCII letter 'P' into A
-        mov  m,a        ;Print successes.
+        mov  m,a        ;Print successes to screen
+        call TX         ;Try to send it out the serial port as well.
 nxbnk:  dcr  e
         inx  h
         jz   errlp
         jmp  prterr
-
 ;Print Failures.
 fbnk:   mvi  a,0x46     ;Load the ASCII letter 'F' into A
-        mov  m,a
+        mov  m,a        ;Print failures to screen
+        call TX         ;Try to send it out the serial port as well.
         jmp  nxbnk
 
 ;error loop.
@@ -281,7 +286,10 @@ errlp:  hlt
 
 ;Copy the third rom's text to video memory until we hit a null char.
 ;0x1000 through 0x17FF is the third ROM. We are going to copy text/data from that to ram.
-sysrdy: lxi h,lcnt      ;22 lines
+;Initialize display.
+sysrdy: mvi a,0x00  ;Turn up brightness of CRT all the way.
+        out 0x3A
+        lxi h,lcnt      ;22 lines
         mvi m,0x16
         lxi h,ccnt      ;80 column
         mvi m,0x50      ;Use actual address
@@ -320,17 +328,11 @@ wt:     mov a,m
         jmp cpy
 ;Hardware serial port routines.
 ;Transmit
-TX: mov a,b
-    call ftext  ;send the text to the display
-    out 0x00    ;Load serial port with data byte. This should auto start transmitting.
+TX: out 0x00    ;Load serial port with data byte. This should auto start transmitting.
 ;Loop until done transmitting.
 TL: in  0x01    ;Get status
     ani 0x01    ;And it with 0x01
     jz  TL      ;if not zero then it's done.
-    pop h
-    pop psw
-    pop d
-    pop b
     ret
 
 ;Receive
