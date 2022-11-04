@@ -94,198 +94,8 @@ init: mvi a,0x64  ;Select T1 MSB, TX
     out 0x3E
 
 ;Do memory check.
-    lxi b,0x0080    ;Use BC for walking bits right
-    lxi d,0x0008    ;A '1' in D indicates a chip failure. E is pass count. Do 8 passes to test all 8 bits of each byte of ram.
-chagn:  lxi h,0x8000
-        mov  b,c    ;Move C to B
-memld:  mov  m,b    ;Move B to memory location.
-        ;rotate B to the RIGHT.
-        mov  a,b
-        rrc
-        mov  b,a
-        ;Now move to next memory address.
-        mov  a,h
-        cpi  0x8F
-        jnz  notdn
-        mov  a,l
-        cpi  0xFF
-        jnz  notdn
-        jmp  memvr
-notdn:  inx  h
-        jmp  memld
+    jmp memcheck    ;Jumps back to sysrdy if the memory test passes.
 
-;Now Verify what was written.
-memvr:  lxi h,0x8000
-        mov b,c         ;move C to B again.
-memrd:  ;Check M with B and then rotate B to the RIGHT.
-        mov  a,b
-        xra  m          ;The result is stored in A so we need to get B again.
-        jnz  merror     ;If the result of the XOR isn't zero then we have a problem.
-cntck:  mov  a,b        ;Now rotate B to the right.
-        rrc
-        mov  b,a
-        ;Now move to next memory address.
-        mov  a,h
-        cpi  0x8F
-        jnz  notdnr
-        mov  a,l
-        cpi  0xFF
-        jnz  notdnr
-        jmp  pssdne
-notdnr: inx  h
-        jmp  memrd
-
-;Record that there was an error if there was one.
-;Figure out which chip has a failure from top to bottom.
-merror: mvi  a,0x8B
-        cmp  h      ;if H>A then C=1. else C=0
-        jc   bnk4f
-        mvi  a,0x87
-        cmp  h      ;if H>A then C=1. else C=0
-        jc   bnk3f
-        mvi  a,0x83
-        cmp  h      ;if H>A then C=1. else C=0
-        jc   bnk2f
-        jmp  bnk1f
-
-;Set the pertaining bit in reg D for each memory failure detected in a chip.
-bnk4f:  mov  a,b
-        xra  m          ;Do the test again.
-        ani  0xF0       ;test the upper four bytes.
-        jz   b4lwr      ;if it's clear than it's the lower four bytes that tested bad.
-        mov a,d
-        ori 0x01
-        mov d,a
-        mov  a,b
-        xra  m          ;Do the test again.
-        ani  0x0F       ;test the lower four bytes. If clear then it was only the upper four bytes that tested bad.
-        jz cntck        ;continue checking.
-b4lwr:  mov a,d
-        ori 0x02
-        mov d,a
-        jmp cntck   ;continue checking.
-
-bnk3f:  mov  a,b
-        xra  m          ;Do the test again.
-        ani  0xF0       ;test the upper four bytes.
-        jz   b3lwr      ;if it's clear than it's the lower four bytes that tested bad.
-        mov a,d
-        ori 0x04
-        mov d,a
-        mov  a,b
-        xra  m          ;Do the test again.
-        ani  0x0F       ;test the lower four bytes. If clear then it was only the upper four bytes that tested bad.
-        jz cntck        ;continue checking.
-b3lwr:  mov a,d
-        ori 0x08
-        mov d,a
-        jmp cntck   ;continue checking.
-
-bnk2f:  mov  a,b
-        xra  m          ;Do the test again.
-        ani  0xF0       ;test the upper four bytes.
-        jz   b2lwr      ;if it's clear than it's the lower four bytes that tested bad.
-        mov a,d
-        ori 0x10
-        mov d,a
-        mov  a,b
-        xra  m          ;Do the test again.
-        ani  0x0F       ;test the lower four bytes. If clear then it was only the upper four bytes that tested bad.
-        jz cntck        ;continue checking.
-b2lwr:  mov a,d
-        ori 0x20
-        mov d,a
-        jmp cntck   ;continue checking.
-
-bnk1f:  mov  a,b
-        xra  m          ;Do the test again.
-        ani  0xF0       ;test the upper four bytes.
-        jz   b1lwr      ;if it's clear than it's the lower four bytes that tested bad.
-        mov a,d
-        ori 0x40
-        mov d,a
-        mov  a,b
-        xra  m          ;Do the test again.
-        ani  0x0F       ;test the lower four bytes. If clear then it was only the upper four bytes that tested bad.
-        jz cntck        ;continue checking.
-b1lwr:  mov a,d
-        ori 0x80
-        mov d,a
-        jmp cntck   ;continue checking.
-
-;Done with a single pass. Rotate C and decrease E
-pssdne: dcr e
-        jz  memdone     ;If E is 0 then we are done with memory check.
-        mov a,c         ;Rotate C to the right.
-        rrc
-        mov c,a
-        jmp chagn
-
-;If there was a failure, try to find some good memory to put basic text data to show which ram chips were detected failures.
-memdone: mov  a,d
-         ori  0x00
-         jz  sysrdy      ;If no 1's in D then memory test passed continue to system ready.
-         mvi  a,0x00
-         out  0x3B
-         mov a,d
-         ani 0x03
-         jz  stk1
-         mov a,d
-         ani 0x0C
-         jz  stk2
-         mov a,d
-         ani 0x30
-         jz  stk3
-         jmp  stk4
-;Try to put stack somewhere else other than where a detected memory failure is at, this way we can use our TX routine.
-;Also try to start video processor at beginning of good memory bank where we will later put basic text data.
-stk1:   lxi sp,0x8FFF
-        lxi h,0x8C01
-        mvi a,0x8C
-        out  0x3C
-        jmp dinit
-stk2:   lxi sp,0x8BFF
-        lxi h,0x8801
-        mvi a,0x88
-        out  0x3C
-        jmp dinit
-stk3:   lxi sp,0x87FF
-        lxi h,0x8401
-        mvi a,0x84
-        out  0x3C
-        jmp dinit
-stk4:   lxi sp,0x83FF
-        lxi h,0x8001
-        mvi a,0x80
-        out  0x3C
-        ;Attempt to display memory error if there was one.
-        ;Load each bit into carry and test. Do this 8 times.
-dinit:  mvi a,0x08  ;Turn brightness of CRT up to a level that is just visible.
-        out 0x3A
-        mvi  e,0x08
-prterr: mov a,d
-        ral
-        mov d,a
-        jc   fbnk       ;Failure detected in this bank. Print 'F'
-        mvi  a,0x50     ;Load the ASCII letter 'P' into A
-        mov  m,a        ;Print successes to screen
-        call TX         ;Try to send it out the serial port as well.
-nxbnk:  dcr  e
-        inx  h
-        jz   errlp
-        jmp  prterr
-;Print Failures.
-fbnk:   mvi  a,0x46     ;Load the ASCII letter 'F' into A
-        mov  m,a        ;Print failures to screen
-        call TX         ;Try to send it out the serial port as well.
-        jmp  nxbnk
-
-;error loop.
-errlp:  hlt
-        jmp errlp
-
-;Copy the third rom's text to video memory until we hit a null char.
-;0x1000 through 0x17FF is the third ROM. We are going to copy text/data from that to ram.
 ;Initialize display.
 sysrdy: mvi a,0x00  ;Turn up brightness of CRT all the way.
         out 0x3A
@@ -301,6 +111,8 @@ sysrdy: mvi a,0x00  ;Turn up brightness of CRT all the way.
         sim
         EI          ;enable IRQ's
 
+;###############################################################################################################################
+;Main loop.
         lxi h,0x1000    ;Start of 3rd ROM
 cpy:    mov a,h
         cpi 0x3F
@@ -319,13 +131,15 @@ skp:    inx h
         jnz cpy
 ;now wait a few seconds before continuing so to give the ascii art time to display.
         push h
-wait:   lxi h,timer1        ;This address get decremented by the display routine.
+wait:   lxi h,timer1        ;This address gets decremented by the display routine.
         mvi m,0xF0
 wt:     mov a,m
         cpi 0x00
         jnz wt
         pop h
         jmp cpy
+
+;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 ;Hardware serial port routines.
 ;Transmit
 TX: out 0x00    ;Load serial port with data byte. This should auto start transmitting.
@@ -342,9 +156,6 @@ RX: in  0x01    ;Get status
 ;Loop until data is ready.
 ;Once data is ready, just read it and it should be in REG A where it needs to be anyways.
     in  0x00    ;Read serial port 1 RX data.
-    pop h
-    pop d
-    pop b
     ret
 
 ;#########################################################################################################################
@@ -587,31 +398,34 @@ multl:  dad  b          ;add BC to HL
 ;#########################################################################################################################
 ;Display IRQ routine
 ;reg DE will be address of current working line number.
+; Display bytes are organized as such:  ACCC~80char~CCCHL
+; -where 'A' is the first attributes byte, 'C' is a character, and 'HL' is the High and Low byte address of the next line.
+; 'H' contains addition attributes data in it's upper four bits.
 disp:   push PSW
         push B
         push D
         push H
-        lhld wlL    ;Get working line number address.
+        lhld wlL    ;Get current working line number address+attributes data.
         xchg        ;Put it in DE
         in  0x32    ;Check for blanking signal.
         ani 0x01
-        cz  blank   ;If zero then display is blanking.
+        cz  blank   ;If zero then display is blanking, reset working line number.
         ;Put working line number into the Video Processor's line pointer.
         mov  a,d
         out  0x3C
         mov  a,e
         out  0x3B
         ;Get start address of next line.
-        lda ccnt    ;get column count
+        lda ccnt    ;get column count. eg: 80
         mov l,a     ;put it in L
         mvi h,0x00  ;clear the upper 8 bits of HL
-        mov a,d     ;also copy the upper 8 bits of DE to A for further processing.
-        ani 0x0F    ;remove the first 4 bits
-        ori 0x80    ;and then OR the 7th bit in
-        mov b,a     ;then move it to B
-        mov c,e     ;move the lower 8 bits of DE to C
-        dad b       ;16 bit add with BC and HL to get the ACTUAL address of next line.
-        inx h       ;bump it up by 1 to get skip past the line attribute byte.
+        mov a,d     ;copy the upper 8 bits of DE to A.
+        ani 0x0F    ;remove the upper 4 bits of attribute data. We don't need it.
+        ori 0x80    ;then OR the 7th bit in because we need it to always be '1'
+        mov d,a     ;then move it back to D
+        inx d       ;add 1 so that we get past the line's attribute data.
+        ;DE now contains the address the current working line with both of it's attributes stripped.
+        dad d       ;16 bit add with DE and HL to get the ACTUAL address of the next line pointer.
         mov d,m     ;Copy new address and line config to DE
         inx h
         mov e,m     ;move the lower 8 bits to E
@@ -625,13 +439,10 @@ disp:   push PSW
         ret
 
 ;Display is blanking. Reset some things and load in the first line address.
+;We also use this routine for a few timers.
 blank:  lhld flL   ;get address of first line.
-        xchg
-        mov a,d     ;also copy the upper 8 bits to A for further processing.
-        ani 0x0F    ;remove the first 4 bits
-        ori 0x80    ;and then OR the 7th bit in
-        mov b,a     ;then move it to D
-        mov c,e     ;move the lower 8 bits to e
+        xchg        ;Move it to DE
+        ;#######################################################
         ;Generic timer stuff not directly related to the screen.
         lxi h,timer1    ;Timer 1
         mov a,m
@@ -654,9 +465,201 @@ blank:  lhld flL   ;get address of first line.
         ret
 blnktm: dcr m
         ret
-
 t1dec:  dcr m
         ret
-
 t2dec:  dcr m
         ret
+
+;******************************************************************************
+;******************************************************************************
+;Main Memory Test routine.
+memcheck: lxi b,0x0080    ;Use BC for walking bits right
+        lxi d,0x0008    ;A '1' in D indicates a chip failure. E is pass count. Do 8 passes to test all 8 bits of each byte of ram.
+chagn:  lxi h,0x8000
+        mov  b,c    ;Move C to B
+memld:  mov  m,b    ;Move B to memory location.
+        ;rotate B to the RIGHT.
+        mov  a,b
+        rrc
+        mov  b,a
+        ;Now move to next memory address.
+        mov  a,h
+        cpi  0x8F
+        jnz  notdn
+        mov  a,l
+        cpi  0xFF
+        jnz  notdn
+        jmp  memvr
+notdn:  inx  h
+        jmp  memld
+
+;Now Verify what was written.
+memvr:  lxi h,0x8000
+        mov b,c         ;move C to B again.
+memrd:  ;Check M with B and then rotate B to the RIGHT.
+        mov  a,b
+        xra  m          ;The result is stored in A so we need to get B again.
+        jnz  merror     ;If the result of the XOR isn't zero then we have a problem.
+cntck:  mov  a,b        ;Now rotate B to the right.
+        rrc
+        mov  b,a
+        ;Now move to next memory address.
+        mov  a,h
+        cpi  0x8F
+        jnz  notdnr
+        mov  a,l
+        cpi  0xFF
+        jnz  notdnr
+        jmp  pssdne
+notdnr: inx  h
+        jmp  memrd
+
+;Record that there was an error if there was one.
+;Figure out which chip has a failure from top to bottom.
+merror: mvi  a,0x8B
+        cmp  h      ;if H>A then C=1. else C=0
+        jc   bnk4f
+        mvi  a,0x87
+        cmp  h      ;if H>A then C=1. else C=0
+        jc   bnk3f
+        mvi  a,0x83
+        cmp  h      ;if H>A then C=1. else C=0
+        jc   bnk2f
+        jmp  bnk1f
+
+;Set the pertaining bit in reg D for each memory failure detected in a chip.
+bnk4f:  mov  a,b
+        xra  m          ;Do the test again.
+        ani  0xF0       ;test the upper four bytes.
+        jz   b4lwr      ;if it's clear than it's the lower four bytes that tested bad.
+        mov a,d
+        ori 0x01
+        mov d,a
+        mov  a,b
+        xra  m          ;Do the test again.
+        ani  0x0F       ;test the lower four bytes. If clear then it was only the upper four bytes that tested bad.
+        jz cntck        ;continue checking.
+b4lwr:  mov a,d
+        ori 0x02
+        mov d,a
+        jmp cntck   ;continue checking.
+
+bnk3f:  mov  a,b
+        xra  m          ;Do the test again.
+        ani  0xF0       ;test the upper four bytes.
+        jz   b3lwr      ;if it's clear than it's the lower four bytes that tested bad.
+        mov a,d
+        ori 0x04
+        mov d,a
+        mov  a,b
+        xra  m          ;Do the test again.
+        ani  0x0F       ;test the lower four bytes. If clear then it was only the upper four bytes that tested bad.
+        jz cntck        ;continue checking.
+b3lwr:  mov a,d
+        ori 0x08
+        mov d,a
+        jmp cntck   ;continue checking.
+
+bnk2f:  mov  a,b
+        xra  m          ;Do the test again.
+        ani  0xF0       ;test the upper four bytes.
+        jz   b2lwr      ;if it's clear than it's the lower four bytes that tested bad.
+        mov a,d
+        ori 0x10
+        mov d,a
+        mov  a,b
+        xra  m          ;Do the test again.
+        ani  0x0F       ;test the lower four bytes. If clear then it was only the upper four bytes that tested bad.
+        jz cntck        ;continue checking.
+b2lwr:  mov a,d
+        ori 0x20
+        mov d,a
+        jmp cntck   ;continue checking.
+
+bnk1f:  mov  a,b
+        xra  m          ;Do the test again.
+        ani  0xF0       ;test the upper four bytes.
+        jz   b1lwr      ;if it's clear than it's the lower four bytes that tested bad.
+        mov a,d
+        ori 0x40
+        mov d,a
+        mov  a,b
+        xra  m          ;Do the test again.
+        ani  0x0F       ;test the lower four bytes. If clear then it was only the upper four bytes that tested bad.
+        jz cntck        ;continue checking.
+b1lwr:  mov a,d
+        ori 0x80
+        mov d,a
+        jmp cntck   ;continue checking.
+
+;Done with a single pass. Rotate C and decrease E
+pssdne: dcr e
+        jz  memdone     ;If E is 0 then we are done with memory check.
+        mov a,c         ;Rotate C to the right.
+        rrc
+        mov c,a
+        jmp chagn
+
+;If there was a failure, try to find some good memory to put basic text data to show which ram chips were detected failures.
+memdone: mov  a,d
+         ori  0x00
+         jz  sysrdy      ;If no 1's in D then memory test passed continue to system ready.
+         mvi  a,0x00
+         out  0x3B
+         mov a,d
+         ani 0x03
+         jz  stk1
+         mov a,d
+         ani 0x0C
+         jz  stk2
+         mov a,d
+         ani 0x30
+         jz  stk3
+         jmp  stk4
+;Try to put stack somewhere else other than where a detected memory failure is at, this way we can use our TX routine.
+;Also try to start video processor at beginning of good memory bank where we will later put basic text data.
+stk1:   lxi sp,0x8FFF
+        lxi h,0x8C01
+        mvi a,0x8C
+        out  0x3C
+        jmp dinit
+stk2:   lxi sp,0x8BFF
+        lxi h,0x8801
+        mvi a,0x88
+        out  0x3C
+        jmp dinit
+stk3:   lxi sp,0x87FF
+        lxi h,0x8401
+        mvi a,0x84
+        out  0x3C
+        jmp dinit
+stk4:   lxi sp,0x83FF
+        lxi h,0x8001
+        mvi a,0x80
+        out  0x3C
+        ;Attempt to display memory error if there was one.
+        ;Load each bit into carry and test. Do this 8 times.
+dinit:  mvi a,0x08  ;Turn brightness of CRT up to a level that is just visible.
+        out 0x3A
+        mvi  e,0x08
+prterr: mov a,d
+        ral
+        mov d,a
+        jc   fbnk       ;Failure detected in this bank. Print 'F'
+        mvi  a,0x50     ;Load the ASCII letter 'P' into A
+        mov  m,a        ;Print successes to screen
+        call TX         ;Try to send it out the serial port as well.
+nxbnk:  dcr  e
+        inx  h
+        jz   errlp
+        jmp  prterr
+;Print Failures.
+fbnk:   mvi  a,0x46     ;Load the ASCII letter 'F' into A
+        mov  m,a        ;Print failures to screen
+        call TX         ;Try to send it out the serial port as well.
+        jmp  nxbnk
+
+;error loop.
+errlp:  hlt
+        jmp errlp
+
