@@ -96,7 +96,7 @@ init: mvi a,0x64  ;Select T1 MSB, TX
 
 ;Do memory check.
     lxi b,0x0080    ;Use BC for walking bits right
-    lxi d,0x0008    ;1 bit in D indicates a chip failure. E is pass count.
+    lxi d,0x0008    ;A '1' in D indicates a chip failure. E is pass count. Do 8 passes to test all 8 bits of each byte of ram.
 chagn:  lxi h,0x8000
         mov  b,c    ;Move C to B
 memld:  mov  m,b    ;Move B to memory location.
@@ -149,20 +149,67 @@ merror: mvi  a,0x8B
         jc   bnk2f
         jmp  bnk1f
 
-;Set the pertaining bit in reg D for each memory failure.
-bnk4f:  mov a,d
-        ori 0x10
+;Set the pertaining bit in reg D for each memory failure detected in a chip.
+bnk4f:  mov  a,b
+        xra  m          ;Do the test again.
+        ani  0xF0       ;test the upper four bytes.
+        jz   b4lwr      ;if it's clear than it's the lower four bytes that tested bad.
+        mov a,d
+        ori 0x01
+        mov d,a
+        mov  a,b
+        xra  m          ;Do the test again.
+        ani  0x0F       ;test the lower four bytes. If clear then it was only the upper four bytes that tested bad.
+        jz cntck        ;continue checking.
+b4lwr:  mov a,d
+        ori 0x02
         mov d,a
         jmp cntck   ;continue checking.
-bnk3f:  mov a,d
+
+bnk3f:  mov  a,b
+        xra  m          ;Do the test again.
+        ani  0xF0       ;test the upper four bytes.
+        jz   b3lwr      ;if it's clear than it's the lower four bytes that tested bad.
+        mov a,d
+        ori 0x04
+        mov d,a
+        mov  a,b
+        xra  m          ;Do the test again.
+        ani  0x0F       ;test the lower four bytes. If clear then it was only the upper four bytes that tested bad.
+        jz cntck        ;continue checking.
+b3lwr:  mov a,d
+        ori 0x08
+        mov d,a
+        jmp cntck   ;continue checking.
+
+bnk2f:  mov  a,b
+        xra  m          ;Do the test again.
+        ani  0xF0       ;test the upper four bytes.
+        jz   b2lwr      ;if it's clear than it's the lower four bytes that tested bad.
+        mov a,d
+        ori 0x10
+        mov d,a
+        mov  a,b
+        xra  m          ;Do the test again.
+        ani  0x0F       ;test the lower four bytes. If clear then it was only the upper four bytes that tested bad.
+        jz cntck        ;continue checking.
+b2lwr:  mov a,d
         ori 0x20
         mov d,a
         jmp cntck   ;continue checking.
-bnk2f:  mov a,d
+
+bnk1f:  mov  a,b
+        xra  m          ;Do the test again.
+        ani  0xF0       ;test the upper four bytes.
+        jz   b1lwr      ;if it's clear than it's the lower four bytes that tested bad.
+        mov a,d
         ori 0x40
         mov d,a
-        jmp cntck   ;continue checking.
-bnk1f:  mov a,d
+        mov  a,b
+        xra  m          ;Do the test again.
+        ani  0x0F       ;test the lower four bytes. If clear then it was only the upper four bytes that tested bad.
+        jz cntck        ;continue checking.
+b1lwr:  mov a,d
         ori 0x80
         mov d,a
         jmp cntck   ;continue checking.
@@ -175,10 +222,66 @@ pssdne: dcr e
         mov c,a
         jmp chagn
 
-memdone: nop
+;Try to find some good memory to put basic text data to show which ram chips were detected failures.
+memdone: mvi  a,0x00
+         out  0x3B
+         mov a,d
+         ani 0x03
+         jz  stk1
+         mov a,d
+         ani 0x0C
+         jz  stk2
+         mov a,d
+         ani 0x30
+         jz  stk3
+         jmp  stk4
+stk1:   lxi h,0x8C01
+        mvi a,0x8C
+        out  0x3C
+        jmp dinit
+stk2:   lxi h,0x8801
+        mvi a,0x88
+        out  0x3C
+        jmp dinit
+stk3:   lxi h,0x8401
+        mvi a,0x84
+        out  0x3C
+        jmp dinit
+stk4:   lxi h,0x8001
+        mvi a,0x80
+        out  0x3C
+        jmp dinit
 
 ;Initialize display.
-        lxi h,lcnt      ;22 lines
+dinit:  mov  a,d
+        ori  0x00
+        jz  sysrdy      ;If no 1's in D then memory test passed continue to system ready.
+        ;Attempt to display memory error if there was one.
+        ;Load each bit into carry and test. Do this 8 times.
+        mvi  e,0x08
+prterr: mov a,d
+        ral
+        mov d,a
+        jc   fbnk       ;Failure detected in this bank. Print 'F'
+        mvi  a,0x50     ;Load the ASCII letter 'P' into A
+        mov  m,a        ;Print successes.
+nxbnk:  dcr  e
+        inx  h
+        jz   errlp
+        jmp  prterr
+
+;Print Failures.
+fbnk:   mvi  a,0x46     ;Load the ASCII letter 'F' into A
+        mov  m,a
+        jmp  nxbnk
+
+;error loop.
+errlp:  hlt
+        jmp errlp
+
+;Copy the third rom's text to video memory until we hit a null char.
+;0x1000 through 0x17FF is the third ROM. We are going to copy text/data from that to ram.
+sysrdy: lxi h,lcnt      ;22 lines
         mvi m,0x16
         lxi h,ccnt      ;80 column
         mvi m,0x50      ;Use actual address
@@ -189,57 +292,8 @@ memdone: nop
         mvi a,0x0B  ;only enable IRQ 7.5 for now.
         sim
         EI          ;enable IRQ's
-;Attempt to display memory error if there was one.
-        mov  a,d
-        ori  0x00
-        jz  sysrdy      ;If no 1's in D then memory test passed.
-        mov a,d
-        ral
-        mov d,a
-        jc   fbnk1      ;Failure detected in this bank.
-        mvi  a,0x50     ;Load the ASCII letter 'P' into A
-        call ftext
-bpnt2:  mov a,d
-        ral
-        mov d,a
-        jc   fbnk2      ;Failure detected in this bank.
-        mvi  a,0x50     ;Load the ASCII letter 'P' into A
-        call ftext
-bpnt3:  mov a,d
-        ral
-        mov d,a
-        jc   fbnk3      ;Failure detected in this bank.
-        mvi  a,0x50     ;Load the ASCII letter 'P' into A
-        call ftext
-bpnt4:  mov a,d
-        ral
-        mov d,a
-        jc   fbnk4      ;Failure detected in this bank.
-        mvi  a,0x50     ;Load the ASCII letter 'P' into A
-        call ftext
-        jmp  errlp
 
-;Print Failures.
-fbnk1:  mvi  a,0x46     ;Load the ASCII letter 'F' into A
-        call ftext
-        jmp  bpnt2
-
-fbnk2:  mvi  a,0x46     ;Load the ASCII letter 'F' into A
-        call ftext
-        jmp  bpnt3
-
-fbnk3:  mvi  a,0x46     ;Load the ASCII letter 'F' into A
-        call ftext
-        jmp  bpnt4
-
-fbnk4:  mvi  a,0x46     ;Load the ASCII letter 'F' into A
-        call ftext
-errlp:  hlt
-        jmp  errlp
-
-;Copy the third rom's text to video memory until we hit a null char.
-;0x1000 through 0x17FF is the third ROM. We are going to copy text/data from that to ram.
-sysrdy: lxi h,0x1000    ;Start of 3rd ROM
+        lxi h,0x1000    ;Start of 3rd ROM
 cpy:    mov a,h
         cpi 0x3F
         jnz ssaver
