@@ -18,9 +18,14 @@ fbnkbt  equ 0x8FF2      ;Fast blinking bits.
 pgln    equ 0x8FF1      ;Page total number of lines
 cladrL  equ 0x8FF0      ;Current Line Address Upper
 cladr   equ 0x8FEF      ;Current Line Address Lower
-stack   equ 0x8FEE      ;Stack pointer
+svrtmr  equ 0x8FEE      ;Screen Saver Timer.
+svrbtr  equ 0x8FED      ;Screen Saver Brightness
+bcrsU   equ 0x8FEC
+bcrs    equ 0x8FEB
+stack   equ 0x8FEA      ;Stack pointer
 bgnadr  equ 0x8000      ;Beginning address of ram
 ;Constants
+savsec  equ 60          ;Screen saver timer in seconds.
 flMU    equ 0xA0        ;Starting point of text. Upper
 flML    equ 0x50        ;Starting point of text. Lower
 flM     equ 0xA050      ;Starting point of text.
@@ -97,15 +102,11 @@ init: mvi a,0x64  ;Select T1 MSB, TX
     jmp memcheck    ;Jumps back to sysrdy if the memory test passes.
 
 ;Initialize display.
-sysrdy: mvi a,0x00  ;Turn up brightness of CRT all the way.
-        out 0x3A
-        lxi h,lcnt      ;22 lines
+sysrdy: lxi h,lcnt      ;22 lines
         mvi m,0x16
         lxi h,ccnt      ;80 column
         mvi m,0x50      ;Use actual address
-        push d
-        call cls    ;clear screen
-        pop  d
+        call cls        ;clear screen
         ;Configure IRQ's
         mvi a,0x0B  ;only enable IRQ 7.5 for now.
         sim
@@ -113,7 +114,14 @@ sysrdy: mvi a,0x00  ;Turn up brightness of CRT all the way.
 
 ;###############################################################################################################################
 ;Main loop.
-        lxi h,0x1000    ;Start of 3rd ROM
+main:   call tbrhi  ;Turn brightness up and restart the screen saver timer.
+        call RX     ;Get data from serial port if any
+        call ftext  ;Put that data on display.
+        jmp  main   ;Loop
+
+
+;Slide show.
+scrsvr: lxi h,0x1000    ;Start of 3rd ROM
 cpy:    mov a,h
         cpi 0x3F
         jnz ssaver
@@ -150,7 +158,11 @@ TL: in  0x01    ;Get status
     ret
 
 ;Receive
-RX: in  0x01    ;Get status
+RX: ;call blnkcrs
+    lda timer1 ;This address gets decremented by the display routine.
+    ora a
+    cz  savtim
+    in  0x01    ;Get status
     ani 0x02    ;And it with 0x02
     jz  RX      ;if not zero then there's a data byte.
 ;Loop until data is ready.
@@ -158,12 +170,43 @@ RX: in  0x01    ;Get status
     in  0x00    ;Read serial port 1 RX data.
     ret
 
+;Blink Cursor
+blnkcrs: lhld bcrs      ;HL now has cursor address
+        lda  blnkbt     ;get blinking bits
+        ani  0x02       ;Get 500ms bit.
+        jz   crsoff
+        mvi  m,0x7f     ;Cursor Visible
+        ret
+
+crsoff: mvi  m,0x20     ;Cursor is blank
+        ret
+
+;Screen Saver Timer.
+savtim: lda svrtmr
+        dcr a
+        sta svrtmr
+        cz  tbrlow  ;turn brightness low after a few seconds.
+        lxi h,timer1 ;This address gets decremented by the display routine.
+        mvi m,0x1E
+        ret
+;Screen Saver Brightness Adjustment.
+tbrlow: mvi a,0x0A  ;Turn down brightness of CRT.
+        out 0x3A
+        ret
+tbrhi:  mvi a,0x00  ;Turn up brightness of CRT all the way.
+        out 0x3A
+        mvi a,savsec    ;Reset the screen saver timer.
+        sta svrtmr
+        ret
+
 ;#########################################################################################################################
 ;Text to display input.
 ftext:  push b
         push d
         push h
         mov  b,a        ;get data stored in A and move it to B
+        cpi  0x01       ;Check for start of heading
+        jz   clear      ;If start of heading then clear screen
         cpi  0x09       ;Check for tab char.
         jz   tab        ;If tab, increase cursor position by 5 spaces!
         cpi  0x0A       ;Check for new line char.
@@ -188,11 +231,29 @@ ftext:  push b
         dad  b          ;add line address to the cursor position to get cursor address.
         pop  b          ;get our data to be stored back off the stack.
         mov  m,b        ;store it in memory where the cursor is pointing to
+        call gbcadr     ;Get blinking cursor address.
         lxi  h,curs     ;get cursor position address
         inr  m          ;increase cursor position by one.
 fmtdon: pop h
         pop d
         pop b
+        ret
+
+;Get blinking cursor address
+gbcadr: lda  curs       ;Get cursor pos
+        xchg            ;store HL in DE
+        lxi  h,ccnt
+        cmp  m          ;compare curs with col count
+        jz   bcnl       ;blinking cursor will be on next line.
+        xchg            ;Get HL from DE
+        inx  h
+        shld bcrs       ;Store HL into blinking cursor address
+        ret
+
+bcnl:   xchg            ;Get HL from DE
+        lxi  b,0x0004
+        dad  b
+        shld bcrs       ;Store HL into blinking cursor address
         ret
 
 ;Next line of text to print
@@ -226,7 +287,9 @@ tab:    lxi  h,curs     ;get cursor
         lxi  h,curs     ;get cursor
         mov  m,a        ;If not beyond column count, add to cursor.
         jmp  fmtdon
-
+;Clear Screen
+clear:  call cls        ;clear screen
+        jmp  fmtdon
 ;New line check. Check if we need to scroll when making a new line.
 lnechk: lda  lcnt       ;get max total line count
         lxi  h,lnmb     ;get working line number
@@ -299,7 +362,7 @@ cls:    lxi h,flM   ;set start of display buffer
         mov  l,e
         dad  b      ;add BC to HL to get ending address of page. HL now contains ending address
         xchg        ;Exchange DE and HL, HL is now starting address again, and DE is ending address.
-sfill:  mvi  m,0x20 ;start filling page with spaces.
+sfill:  mvi  m,0x20 ;fill page with spaces.
         mov  a,d
         cmp  h
         jnz  kflin
@@ -311,8 +374,24 @@ sfill:  mvi  m,0x20 ;start filling page with spaces.
         mvi  m,0x01
         lxi  h,lnmb ;set working line number to 0
         mvi  m,0x00
-        call slnt   ;Setup the first two lines of text.
+;Setup the whole screen.
+clrfll: lxi  h,lcnt ;Get line count.
+        lda  lnmb   ;Get working line number.
+        cmp  m      ;Compare the two.
+        jz   stpdn  ;If the same then we are done.
+        call slnt   ;call line setup
+        lxi  h,lnmb ;Get working line number pointer
+        inr  m      ;Increase working line number
+        jmp  clrfll ;loop until done.
+
+;setup done
+stpdn:  lxi  h,curs ;reset cursor position to 1
+        mvi  m,0x01
+        lxi  h,lnmb ;set working line number to 0
+        mvi  m,0x00
+        call slnt   ;call line setup
         ret
+
 ;Keep filling the buffer.
 kflin:  inx  h
         jmp  sfill
@@ -321,7 +400,7 @@ kflin:  inx  h
 ;#########################################################################################################################
 ;Setup next line of text.
 slnt:   call gliadr  ;Get working line start address, returns it in HL
-        shld cladr  ;Store it for later use. This destroys the original contents of HL.
+        shld cladr  ;Store it for later use.
         mvi  m,0x00 ;Set attributes for this line, and for next line of text to be the last line.
         xchg        ;Now put start address in DE
         ;Get column count and add it to HL
@@ -337,14 +416,15 @@ slnt:   call gliadr  ;Get working line start address, returns it in HL
         dcr  a          ;Decrease A by 1
         lxi  h,lnmb     ;get working line number
         cmp  m          ;compare it
-        jz   wrplne     ;jump to wrap line routine.
-        xchg
+        jz   wrplne     ;jump to wrap line routine. Make last line point to first memory address containing text info.
+        xchg        ;Get HL back, we don't need DE anymore. It should still be pointing to H of the next line pointer.
         mov  d,h    ;Make a copy of HL for later use.
         mov  e,l
-        inx  h      ;Make HL contain the address of the next line.
+        inx  h      ;Make HL contain the start address of the next line.
         inx  h
         mvi  m,0x00 ;Set default for this line to be the last line.
-        xchg        ;Get the working line next address's address back.
+        xchg        ;Get the working line next address's address back from DE and put it in HL
+        ;DE is now the next line's start address and HL is the address of the next line pointer.
         mov  a,d    ;Now move DE to the next line address spot in memory, but use the default line settings.
         ani 0x0F    ;remove the first 4 bits
         ori 0xA0    ;and then OR 0xA0
@@ -352,7 +432,7 @@ slnt:   call gliadr  ;Get working line start address, returns it in HL
         inx  h
         mov  m,e
         ret
-        ;Make last line point to first memory address containing text info.
+;Make last line point to first memory address containing text info.
 wrplne: xchg        ;Get HL back.
         mvi  m,flMU
         inx  h
@@ -415,8 +495,17 @@ disp:   push PSW
         out  0x3C
         mov  a,e
         out  0x3B
+done:   call nxtadr
+        shld wlL    ;Store it.
+        pop  H      ;Done with IRQ, pop everything off the stack and return.
+        pop  D
+        pop  B
+        pop  PSW
+        EI          ;re-enable IRQ's
+        ret
+
         ;Get start address of next line.
-        lda ccnt    ;get column count. eg: 80
+nxtadr: lda ccnt    ;get column count. eg: 80
         mov l,a     ;put it in L
         mvi h,0x00  ;clear the upper 8 bits of HL
         mov a,d     ;copy the upper 8 bits of DE to A.
@@ -430,12 +519,6 @@ disp:   push PSW
         inx h
         mov e,m     ;move the lower 8 bits to E
         xchg        ;Move the working line number address to HL
-        shld wlL    ;Store it.
-        pop  H      ;Done with IRQ, pop everything off the stack and return.
-        pop  D
-        pop  B
-        pop  PSW
-        EI          ;re-enable IRQ's
         ret
 
 ;Display is blanking. Reset some things and load in the first line address.
