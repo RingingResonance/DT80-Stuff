@@ -22,9 +22,13 @@ svrtmr  equ 0x8FEE      ;Screen Saver Timer.
 svrbtr  equ 0x8FED      ;Screen Saver Brightness
 bcrsU   equ 0x8FEC
 bcrs    equ 0x8FEB
-stack   equ 0x8FEA      ;Stack pointer
+RXBPT   equ 0x8FEA      ;RX buffer IN index. Used by the RX routine.
+RXBFF   equ 0x8FE9      ;RX buffer OUT index. Used by the ftext routine.
+stack   equ 0x8FE8      ;Stack pointer
 bgnadr  equ 0x8000      ;Beginning address of ram
 ;Constants
+RXstrt  equ 0x8C00      ;RX buffer start address
+RXblng  equ 0xFF        ;RX buffer Max Length
 savsec  equ 60          ;Screen saver timer in seconds.
 flMU    equ 0xA0        ;Starting point of text. Upper
 flML    equ 0x50        ;Starting point of text. Lower
@@ -53,10 +57,11 @@ Azero:	mvi  a,0x0F	;Disable IRQs
 ;# Built in IRQ vectors.
 org	0x0024		;TRAP
 	ret
-org	0x002C		;RST5.5
+org	0x002C		;RST5.5 TX stuff.
     ret
-org	0x0034		;RST6.5
-    ret
+org	0x0034		;RST6.5 RX stuff.
+    DI
+    jmp  RXCHK
 org	0x003C		;RST7.5
     DI
 	jmp  disp
@@ -107,45 +112,25 @@ sysrdy: lxi h,lcnt      ;22 lines
         lxi h,ccnt      ;80 column
         mvi m,0x50      ;Use actual address
         call cls        ;clear screen
+        ;Initialize Input Buffer
+        mvi a,0x01
+        sta RXBFF
+        mvi a,0x01
+        sta RXBPT
         ;Configure IRQ's
-        mvi a,0x0B  ;only enable IRQ 7.5 for now.
+        mvi a,0x09  ;only enable IRQ's 6.5, and 7.5 for now.
         sim
         EI          ;enable IRQ's
+        call tbrhi  ;Turn brightness up and restart the screen saver timer.
 
 ;###############################################################################################################################
 ;Main loop.
-main:   call tbrhi  ;Turn brightness up and restart the screen saver timer.
-        call RX     ;Get data from serial port if any
-        call ftext  ;Put that data on display.
+main:   lda timer1  ;This address gets decremented by the display routine.
+        ora a
+        cz  savtim
+        hlt
+        call prtbff
         jmp  main   ;Loop
-
-
-;Slide show.
-scrsvr: lxi h,0x1000    ;Start of 3rd ROM
-cpy:    mov a,h
-        cpi 0x3F
-        jnz ssaver
-        mov a,l
-        cpi 0xFF
-        jnz ssaver
-        lxi h,0x1000    ;Start of 3rd ROM
-ssaver: mov a,m
-        cpi 0xFF
-        jz  skp
-        call ftext
-skp:    inx h
-        mov a,m
-        cpi 0x00
-        jnz cpy
-;now wait a few seconds before continuing so to give the ascii art time to display.
-        push h
-wait:   lxi h,timer1        ;This address gets decremented by the display routine.
-        mvi m,0xF0
-wt:     mov a,m
-        cpi 0x00
-        jnz wt
-        pop h
-        jmp cpy
 
 ;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 ;Hardware serial port routines.
@@ -157,18 +142,65 @@ TL: in  0x01    ;Get status
     jz  TL      ;if not zero then it's done.
     ret
 
-;Receive
-RX: ;call blnkcrs
-    lda timer1 ;This address gets decremented by the display routine.
-    ora a
-    cz  savtim
-    in  0x01    ;Get status
-    ani 0x02    ;And it with 0x02
-    jz  RX      ;if not zero then there's a data byte.
-;Loop until data is ready.
-;Once data is ready, just read it and it should be in REG A where it needs to be anyways.
-    in  0x00    ;Read serial port 1 RX data.
-    ret
+;Receive IRQ
+RXCHK:  push b
+        push d
+        push h
+        push psw
+        in  0x01    ;Get status
+        ani 0x02    ;And it with 0x02
+        jz  RXdne   ;if 1 then there's a data byte ready.
+        call tbrhi  ;Turn brightness up and restart the screen saver timer.
+;If there is data then read it into the RX buffer.
+        lda RXBPT   ;Get input buffer index
+        mov c,a     ;Move it to C
+        mvi b,0x00  ;Clear B
+        lxi h,RXstrt    ;Get buffer start address
+        dad b       ;Add them together.
+        in  0x00    ;Read serial port 1 RX data.
+        mov m,a     ;Move it into the buffer.
+        lda RXBPT   ;Get input buffer index
+        mov c,a
+        cpi RXblng  ;compare it with max length
+        jz  rbrst   ;reset index if it's at it's max.
+        mov a,c   ;Get input buffer index
+        inr a       ;Otherwise increase it by one.
+        sta RXBPT   ;Store input buffer index
+RXdne:  pop psw
+        pop h
+        pop d
+        pop b
+        EI          ;re-enable IRQ's
+        ret
+
+rbrst:  mvi a,0x01
+        sta RXBPT
+        jmp RXdne
+
+;Print what's in the buffer. FIFO
+prtbff: lda RXBFF   ;Get print buffer index
+        mov c,a     ; Put it in C
+        lda RXBPT   ;Get input buffer index put it in A
+        cmp c       ;Compare A and C
+        rz          ;If they are the same then return.
+        ;If they are different then continue and loop.
+        mvi b,0x00
+        lxi h,RXstrt    ;Get buffer start address
+        dad b       ;Add them together.
+        mov a,m     ;Get Buffer data and put it in A
+        call ftext  ;Put that data on display.
+        lda RXBFF   ;Get print buffer index
+        mov c,a     ;Put it in C
+        cpi RXblng  ;compare it with max length
+        jz  pbrst   ;reset index if it's at it's max.
+        mov a,c   ;Get print buffer index
+        inr a       ;Otherwise increase it by one.
+        sta RXBFF   ;Store input buffer index
+        jmp prtbff  ;Loop
+
+pbrst:  mvi a,0x01
+        sta RXBFF
+        jmp prtbff  ;Loop
 
 ;Blink Cursor
 blnkcrs: lhld bcrs      ;HL now has cursor address
@@ -190,7 +222,7 @@ savtim: lda svrtmr
         mvi m,0x1E
         ret
 ;Screen Saver Brightness Adjustment.
-tbrlow: mvi a,0x0A  ;Turn down brightness of CRT.
+tbrlow: mvi a,0x08  ;Turn down brightness of CRT.
         out 0x3A
         ret
 tbrhi:  mvi a,0x00  ;Turn up brightness of CRT all the way.
