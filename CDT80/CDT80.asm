@@ -24,7 +24,10 @@ bcrsU   equ 0x8FEC
 bcrs    equ 0x8FEB
 RXBPT   equ 0x8FEA      ;RX buffer IN index. Used by the RX routine.
 RXBFF   equ 0x8FE9      ;RX buffer OUT index. Used by the ftext routine.
-stack   equ 0x8FE8      ;Stack pointer
+escprs  equ 0x8FE8      ;ESC pressed flags.
+dspstt  equ 0x8FE7      ;Display settings
+sattb   equ 0x8FE6
+stack   equ 0x8FE5      ;Stack pointer
 bgnadr  equ 0x8000      ;Beginning address of ram
 ;Constants
 RXstrt  equ 0x8C00      ;RX buffer start address
@@ -67,14 +70,11 @@ org	0x003C		;RST7.5
 	jmp  disp
 
 org 0x0044		;Leave space for text.
-	nop		    ;Mark it with a few 0x00's for easier editing in the hex editor.
-	nop
-	nop
-	nop
 
-org 0x0115
 ;initialize serial port
-init: mvi a,0x64  ;Select T1 MSB, TX
+init: mvi a,0xFF
+    sta escprs
+    mvi a,0x64  ;Select T1 MSB, TX
     out 0x13
     mvi a,0x00
     out 0x11
@@ -107,7 +107,11 @@ init: mvi a,0x64  ;Select T1 MSB, TX
     jmp memcheck    ;Jumps back to sysrdy if the memory test passes.
 
 ;Initialize display.
-sysrdy: lxi h,lcnt      ;22 lines
+sysrdy: mvi a,0x00  ;Set default attributes.
+        sta sattb
+        mvi a,0x59
+        sta dspstt  ;set display defaults
+        lxi h,lcnt      ;22 lines
         mvi m,0x16
         lxi h,ccnt      ;80 column
         mvi m,0x50      ;Use actual address
@@ -129,7 +133,9 @@ main:   lda timer1  ;This address gets decremented by the display routine.
         ora a
         cz  savtim
         hlt
+        call blnkcrs
         call prtbff
+        call blnker ;Call blink routine.
         jmp  main   ;Loop
 
 ;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -205,12 +211,25 @@ pbrst:  mvi a,0x01
 ;Blink Cursor
 blnkcrs: lhld bcrs      ;HL now has cursor address
         lda  blnkbt     ;get blinking bits
-        ani  0x02       ;Get 500ms bit.
+        ani  0x01       ;Get 250ms bit.
         jz   crsoff
-        mvi  m,0x7f     ;Cursor Visible
+        mvi  m,0x08     ;Cursor Visible
         ret
 
-crsoff: mvi  m,0x20     ;Cursor is blank
+crsoff: mvi  m,0x00     ;Cursor is blank
+        ret
+
+;Blinker Routine. Makes the cursor and text blink.
+blnker: lda  blnkbt     ;get blinking bits
+        ani  0x02       ;Get 500ms bit.
+        jz   bitff
+        lda  dspstt
+        out  0x3F
+        ret
+
+bitff:  lda  dspstt
+        ani  0xFE     ;Blank
+        out  0x3F
         ret
 
 ;Screen Saver Timer.
@@ -237,6 +256,17 @@ ftext:  push b
         push d
         push h
         mov  b,a        ;get data stored in A and move it to B
+        ;Check for ESC key press.
+        cpi  0x1B
+        jz   ESC
+        ;Check for if previous char was an ESC press.
+        lda  escprs
+        ori  0x00
+        jz   nESC       ;If it was then record this keypress into escprs as the ESC command.
+        ;If previous key's were the start of an ESC sequence then check ESC commands.
+        jmp  chESC
+        ;No ESC sequence found, continue with normal text to display input.
+noESC:  mov  a,b
         cpi  0x01       ;Check for start of heading
         jz   clear      ;If start of heading then clear screen
         cpi  0x09       ;Check for tab char.
@@ -258,17 +288,147 @@ ftext:  push b
         ;Now get the address of working line and cursor
         lhld cladr      ;Get line start address and put it in HL
         lda  curs       ;get cursor
-        mov  c,a        ;move it to C
-        mvi  b,0x00     ;clear B
-        dad  b          ;add line address to the cursor position to get cursor address.
+        mov  e,a        ;move it to C
+        mvi  d,0x00     ;clear B
+        dad  d          ;add line address to the cursor position to get cursor address.
         pop  b          ;get our data to be stored back off the stack.
         mov  m,b        ;store it in memory where the cursor is pointing to
+        ;Update attribute for this char.
+        lxi  d,0x1000
+        dad  d          ;Add 4K of memory space to get to character attributes memory
+        lda  sattb
+        mov  m,a        ;Result is in A, move it back to attributes memory.
         call gbcadr     ;Get blinking cursor address.
         lxi  h,curs     ;get cursor position address
         inr  m          ;increase cursor position by one.
 fmtdon: pop h
         pop d
         pop b
+        ret
+
+;ESC sequence stuff.
+        ;ESC has been pressed, load 0x00 into escprs
+ESC:    mvi a,0x00
+        sta escprs
+        jmp fmtdon
+        ;Get next char after ESC and put it in escprs
+nESC:   mov a,b
+        sta escprs
+        jmp fmtdon
+        ;Do ESC command.
+chESC:  lda escprs
+        ;check for 'd' command.
+        cpi 0x64        ;check for the letter 'd'
+        jz  sdsp        ;Set display command.
+        ;check for 'l' command.
+        cpi 0x6C        ;check for the letter 'l'
+        jz  slinea      ;Set line attribute command.
+        ;check for 'a' command.
+        cpi 0x61        ;check for the letter 'a'
+        jz  sattrb      ;Set line attribute command.
+        ;check for 'c' command.
+        cpi 0x63        ;check for the letter 'c'
+        jz  schar      ;Set char attribute command.
+        ;If no valid ESC commands were found then reset escprs to 0xFF
+        mvi a,0xFF
+        sta escprs
+        jmp noESC      ;No ESC command found.
+
+;Display Setting ESC code
+sdsp:   mov a,b
+        call nTOb       ;Convert numpad entry into binary bits.
+        mov c,a
+        lda dspstt      ;get display settings.
+        xra c           ;Xor it with C
+        sta dspstt      ;store display settings.
+        out 0x3F        ;update the display settings.
+        mvi a,0xFF
+        sta escprs      ;reset escprs
+        jmp  fmtdon
+
+;Line attribute setting ESC code. Modifies the next line after current working line.
+slinea: lhld cladr      ;Get line start address and put it in HL
+        lda  ccnt       ;Get col count
+        mov  e,a
+        mvi  d,0x00
+        dad  d          ;Get to end of line attributes.
+        inx  h          ;Bump it one more.
+        mov  a,b        ;Get setting data back.
+        call nTOb       ;Convert numpad entry into binary bits.
+        ani  0xF0       ;Only modify the upper four bits.
+        mov  c,m        ;Put memory into C
+        xra  c          ;toggle via Xor'ing it with C
+        mov  m,a        ;Result is in A, move it back to memory.
+        mvi a,0xFF
+        sta escprs      ;reset escprs
+        jmp  fmtdon
+
+;Attribute setting ESC code. Modifies current line.
+sattrb: lhld cladr      ;Get line start address and put it in HL
+        mov  a,b        ;Get setting data back.
+        call nTOb       ;Convert numpad entry into binary bits.
+        mov  c,m        ;Put memory into C
+        xra  c          ;toggle via Xor'ing it with C
+        mov  m,a        ;Result is in A, move it back to memory.
+        mvi a,0xFF
+        sta escprs      ;reset escprs
+        jmp  fmtdon
+
+;Character Attribute setting ESC code. Modifies current char.
+schar:  mov  a,b        ;Get setting data back.
+        call nTOb       ;Convert numpad entry into binary bits.
+        mov  c,a        ;Put bits into C
+        lda  sattb      ;get attributes setting.
+        xra  c          ;toggle via Xor'ing it with C
+        sta  sattb      ;get attributes setting.
+        mvi a,0xFF
+        sta escprs      ;reset escprs
+        jmp  fmtdon
+
+dreset: lxi h,9000
+drlp:   mvi m,0x00
+        inx h
+        mov a,h
+        cpi 0xA0
+        jnz drlp
+        mvi a,0xFF
+        sta escprs      ;reset escprs
+        ret
+
+;numpad to binary bit.
+nTOb:   cpi  0x31
+        jz   num1
+        cpi  0x32
+        jz   num2
+        cpi  0x33
+        jz   num3
+        cpi  0x34
+        jz   num4
+        cpi  0x35
+        jz   num5
+        cpi  0x36
+        jz   num6
+        cpi  0x37
+        jz   num7
+        cpi  0x38
+        jz   num8
+        mvi  a,0x00
+        ret
+num1:    mvi  a,0x01
+        ret
+num2:    mvi  a,0x02
+        ret
+num3:    mvi  a,0x04
+        ret
+num4:    mvi  a,0x08
+        ret
+num5:    mvi  a,0x10
+        ret
+num6:    mvi  a,0x20
+        ret
+num7:    mvi  a,0x40
+        ret
+num8:    mvi  a,0x80
         ret
 
 ;Get blinking cursor address
@@ -281,9 +441,8 @@ gbcadr: lda  curs       ;Get cursor pos
         inx  h
         shld bcrs       ;Store HL into blinking cursor address
         ret
-
 bcnl:   xchg            ;Get HL from DE
-        lxi  b,0x0004
+        lxi  b,0x04
         dad  b
         shld bcrs       ;Store HL into blinking cursor address
         ret
@@ -320,7 +479,7 @@ tab:    lxi  h,curs     ;get cursor
         mov  m,a        ;If not beyond column count, add to cursor.
         jmp  fmtdon
 ;Clear Screen
-clear:  call cls        ;clear screen
+clear:  call cls        ;clear screen.
         jmp  fmtdon
 ;New line check. Check if we need to scroll when making a new line.
 lnechk: lda  lcnt       ;get max total line count
@@ -422,6 +581,7 @@ stpdn:  lxi  h,curs ;reset cursor position to 1
         lxi  h,lnmb ;set working line number to 0
         mvi  m,0x00
         call slnt   ;call line setup
+        call dreset ;Display Attributes Reset.
         ret
 
 ;Keep filling the buffer.
@@ -463,6 +623,10 @@ slnt:   call gliadr  ;Get working line start address, returns it in HL
         mov  m,a
         inx  h
         mov  m,e
+        lhld cladr
+        lxi  d,0x1000
+        dad  d          ;Add 4K of memory space to get to character attributes memory
+        call gbcadr     ;Get blinking cursor address.
         ret
 ;Make last line point to first memory address containing text info.
 wrplne: xchg        ;Get HL back.
