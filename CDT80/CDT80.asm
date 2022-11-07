@@ -210,6 +210,8 @@ pbrst:  mvi a,0x01
 
 ;Blink Cursor
 blnkcrs: lhld bcrs      ;HL now has cursor address
+        lxi  d,0x1000
+        dad  d
         lda  blnkbt     ;get blinking bits
         ani  0x01       ;Get 250ms bit.
         jz   crsoff
@@ -277,7 +279,15 @@ noESC:  mov  a,b
         jz   rtrn       ;If return char, reset cursor to 0x01!
         cpi  0x08       ;Check for backspace.
         jz   bkspc      ;If backspace, reduce cursor by 1 unless it's already at 1
-        push b          ;Store B on the stack
+        lhld bcrs       ;Get cursor address pointer.
+        mov  m,b        ;store char it in memory where the cursor is pointing to
+        ;Update attribute for this char.
+        lxi  d,0x1000
+        dad  d          ;Add 4K of memory space to get to character attributes memory
+        lda  sattb
+        mov  m,a        ;Result is in A, move it back to attributes memory.
+        lxi  h,curs     ;get cursor position address
+        inr  m          ;increase cursor position by one.
         ;Now check if we need to move to the next line.
         lda  curs       ;get cursor position
         mov  b,a        ;move it to B for compare
@@ -285,27 +295,20 @@ noESC:  mov  a,b
         inr  a          ;increase A by one
         cmp  b          ;compare the two
         cz   nxtlne     ;If the same, call nxtlne
-        ;Now get the address of working line and cursor
-        lhld cladr      ;Get line start address and put it in HL
-        lda  curs       ;get cursor
-        mov  e,a        ;move it to C
-        mvi  d,0x00     ;clear B
-        dad  d          ;add line address to the cursor position to get cursor address.
-        pop  b          ;get our data to be stored back off the stack.
-        mov  m,b        ;store it in memory where the cursor is pointing to
-        ;Update attribute for this char.
-        lxi  d,0x1000
-        dad  d          ;Add 4K of memory space to get to character attributes memory
-        lda  sattb
-        mov  m,a        ;Result is in A, move it back to attributes memory.
-        call gbcadr     ;Get blinking cursor address.
-        lxi  h,curs     ;get cursor position address
-        inr  m          ;increase cursor position by one.
+        call csadr      ;update cursor address.
 fmtdon: pop h
         pop d
         pop b
         ret
 
+;Get cursor address, returns it in HL and bcrs
+csadr:  lhld cladr      ;Get line start address and put it in HL
+        lda  curs       ;get cursor
+        mov  e,a        ;move it to C
+        mvi  d,0x00     ;clear D
+        dad  d          ;add line address to the cursor position to get cursor address.
+        shld bcrs
+        ret
 ;ESC sequence stuff.
         ;ESC has been pressed, load 0x00 into escprs
 ESC:    mvi a,0x00
@@ -431,22 +434,6 @@ num7:    mvi  a,0x40
 num8:    mvi  a,0x80
         ret
 
-;Get blinking cursor address
-gbcadr: lda  curs       ;Get cursor pos
-        xchg            ;store HL in DE
-        lxi  h,ccnt
-        cmp  m          ;compare curs with col count
-        jz   bcnl       ;blinking cursor will be on next line.
-        xchg            ;Get HL from DE
-        inx  h
-        shld bcrs       ;Store HL into blinking cursor address
-        ret
-bcnl:   xchg            ;Get HL from DE
-        lxi  b,0x04
-        dad  b
-        shld bcrs       ;Store HL into blinking cursor address
-        ret
-
 ;Next line of text to print
 nxtlne: call lnechk     ;Check to see if we are on the last line and if we need to scroll.
         lxi  h,curs     ;get cursor
@@ -458,31 +445,47 @@ newlne: call lnechk     ;Check to see if we are on the last line.
         call slnt       ;setup next line of text
         jmp  fmtdon
 ;Return
-rtrn:   lxi  h,curs     ;get cursor
+rtrn:   call clrattb    ;Clear previous Cursor attribute.
+        lxi  h,curs     ;get cursor
         mvi  m,0x01     ;reset it to one
+        call csadr      ;update cursor address.
         jmp  fmtdon
 ;Backspace.
-bkspc:  lxi  h,curs     ;get cursor
+bkspc:  call clrattb    ;Clear previous Cursor attribute.
+        lxi  h,curs     ;get cursor
         mov  a,m        ;move it to A for comparison
         cpi  0x01
         jz   fmtdon     ;if it's already at 1, then don't do anything
         dcr  m          ;otherwise decrease it by 1
+        call csadr      ;update cursor address.
         jmp  fmtdon
 ;Tab
-tab:    lxi  h,curs     ;get cursor
+tab:    call clrattb    ;Clear previous Cursor attribute.
+        lxi  h,ccnt     ;get col count
         mov  a,m        ;move it to A for comparison
-        adi  0x05       ;add 5
-        lxi  h,ccnt
-        cmp  m
-        jz   fmtdon     ;if it goes beyond the end of the line do not continue to add.
+        sbi  0x06       ;add 5
         lxi  h,curs     ;get cursor
+        cmp  m          ;Compare it.
+        jc   fmtdon     ;if it goes beyond the end of the line do not continue to add.
+        lda  curs       ;get cursor
+        adi  0x05       ;add 5
         mov  m,a        ;If not beyond column count, add to cursor.
+        call csadr      ;update cursor address.
         jmp  fmtdon
+
+;Clear  char attribute.
+clrattb: lhld bcrs      ;HL now has cursor address
+        lxi  d,0x1000
+        dad  d
+        mvi  m,0x00     ;Cursor Off
+        ret
+
 ;Clear Screen
 clear:  call cls        ;clear screen.
         jmp  fmtdon
 ;New line check. Check if we need to scroll when making a new line.
-lnechk: lda  lcnt       ;get max total line count
+lnechk: call clrattb    ;Clear previous Cursor attribute.
+        lda  lcnt       ;get max total line count
         lxi  h,lnmb     ;get working line number
         inr  m          ;increase line number by one
         cmp  m          ;compare it
@@ -528,6 +531,12 @@ clrlne: call gliadr     ;get working line address. Returns it in HL
 clrfil: mov  h,d        ;Get address pointer back from DE
         mov  l,e
         mvi  m,0x20     ;Fill with spaces
+        ;Clear the attributes.
+        push b
+        lxi  b,0x1000
+        dad  b
+        mvi  m,0x00     ;Clear it.
+        pop  b
         inx  d
         lxi  h,ccnt     ;get total column count setting
         mov  a,m
@@ -623,10 +632,7 @@ slnt:   call gliadr  ;Get working line start address, returns it in HL
         mov  m,a
         inx  h
         mov  m,e
-        lhld cladr
-        lxi  d,0x1000
-        dad  d          ;Add 4K of memory space to get to character attributes memory
-        call gbcadr     ;Get blinking cursor address.
+        call csadr      ;update cursor address.
         ret
 ;Make last line point to first memory address containing text info.
 wrplne: xchg        ;Get HL back.
