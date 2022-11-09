@@ -27,15 +27,17 @@ RXBFF   equ 0x8FE9      ;RX buffer OUT index. Used by the ftext routine.
 escprs  equ 0x8FE8      ;ESC pressed flags.
 dspstt  equ 0x8FE7      ;Display settings
 sattb   equ 0x8FE6
-stack   equ 0x8FE5      ;Stack pointer
+orgatr  equ 0x8FE5
+stack   equ 0x8FE4      ;Stack pointer
 bgnadr  equ 0x8000      ;Beginning address of ram
 ;Constants
 RXstrt  equ 0x8C00      ;RX buffer start address
 RXblng  equ 0xFF        ;RX buffer Max Length
 savsec  equ 60          ;Screen saver timer in seconds.
-flMU    equ 0xA0        ;Starting point of text. Upper
-flML    equ 0x50        ;Starting point of text. Lower
-flM     equ 0xA050      ;Starting point of text.
+flMU    equ 0xA0        ;Starting point of text and it's attributes. Upper
+flML    equ 0x00        ;Starting point of text. Lower
+flM     equ 0xA000      ;Starting point of text.
+dsdflt  equ 0x79        ;Display (0x3F) Defaults
 
 org 0x0000
 Azero:	mvi  a,0x0F	;Disable IRQs
@@ -43,7 +45,7 @@ Azero:	mvi  a,0x0F	;Disable IRQs
  	lxi sp,stack
  	mvi a,0xFF  ;Turn down brightness of CRT all the way.
 	out 0x3A
-	mvi a,0x48  ;Initialize video processor clock and config.
+	mvi a,dsdflt  ;Initialize video processor clock and config.
 	out 0x3F
 ;initialize serial port
     ;Configure Bitrate Timer
@@ -69,12 +71,11 @@ org	0x003C		;RST7.5
     DI
 	jmp  disp
 
-org 0x0044		;Leave space for text.
-
-;initialize serial port
-init: mvi a,0xFF
-    sta escprs
-    mvi a,0x64  ;Select T1 MSB, TX
+;initialize serial port for default 9600 8N1
+;Do this before memory check in case there is an error and the CRT isn't working because
+;memory check also sends debugging data out the serial port.
+org 0x0044
+init: mvi a,0x64  ;Select T1 MSB, TX
     out 0x13
     mvi a,0x00
     out 0x11
@@ -106,23 +107,26 @@ init: mvi a,0xFF
 ;Do memory check.
     jmp memcheck    ;Jumps back to sysrdy if the memory test passes.
 
-;Initialize display.
-sysrdy: mvi a,0x00  ;Set default attributes.
+;Initialize memory.
+sysrdy: mvi a,0xFF
+        sta escprs
+        mvi a,0x00  ;Set default attributes.
         sta sattb
-        mvi a,0x59
+        mvi a,dsdflt
         sta dspstt  ;set display defaults
+;Initialize display for 80col, 22lines.
         lxi h,lcnt      ;22 lines
         mvi m,0x16
         lxi h,ccnt      ;80 column
         mvi m,0x50      ;Use actual address
         call cls        ;clear screen
-        ;Initialize Input Buffer
+        ;Initialize Input Buffer Pointers.
         mvi a,0x01
         sta RXBFF
         mvi a,0x01
         sta RXBPT
         ;Configure IRQ's
-        mvi a,0x09  ;only enable IRQ's 6.5, and 7.5 for now.
+        mvi a,0x09  ;Enable IRQ's 6.5, and 7.5
         sim
         EI          ;enable IRQ's
         call tbrhi  ;Turn brightness up and restart the screen saver timer.
@@ -132,10 +136,10 @@ sysrdy: mvi a,0x00  ;Set default attributes.
 main:   lda timer1  ;This address gets decremented by the display routine.
         ora a
         cz  savtim
-        hlt
-        call blnkcrs
-        call prtbff
-        call blnker ;Call blink routine.
+        call blnkcrs    ;Blink the cursor.
+        call prtbff ;Print what's in the buffer onto the screen.
+        call blnker ;Text blink routine.
+        hlt         ;shhhh, goto sleep...
         jmp  main   ;Loop
 
 ;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -215,16 +219,16 @@ blnkcrs: lhld bcrs      ;HL now has cursor address
         lda  blnkbt     ;get blinking bits
         ani  0x01       ;Get 250ms bit.
         jz   crsoff
-        mvi  m,0x08     ;Cursor Visible
+        mvi  m,0x02     ;Cursor Visible/Inverted.
         ret
 
-crsoff: mvi  m,0x00     ;Cursor is blank
+crsoff: mvi  m,0x00     ;Cursor is Blank/Normal
         ret
 
-;Blinker Routine. Makes the cursor and text blink.
+;Blinker Routine. Makes the text blink.
 blnker: lda  blnkbt     ;get blinking bits
         ani  0x02       ;Get 500ms bit.
-        jz   bitff
+        jnz   bitff
         lda  dspstt
         out  0x3F
         ret
@@ -301,14 +305,6 @@ fmtdon: pop h
         pop b
         ret
 
-;Get cursor address, returns it in HL and bcrs
-csadr:  lhld cladr      ;Get line start address and put it in HL
-        lda  curs       ;get cursor
-        mov  e,a        ;move it to C
-        mvi  d,0x00     ;clear D
-        dad  d          ;add line address to the cursor position to get cursor address.
-        shld bcrs
-        ret
 ;ESC sequence stuff.
         ;ESC has been pressed, load 0x00 into escprs
 ESC:    mvi a,0x00
@@ -387,16 +383,6 @@ schar:  mov  a,b        ;Get setting data back.
         mvi a,0xFF
         sta escprs      ;reset escprs
         jmp  fmtdon
-
-dreset: lxi h,9000
-drlp:   mvi m,0x00
-        inx h
-        mov a,h
-        cpi 0xA0
-        jnz drlp
-        mvi a,0xFF
-        sta escprs      ;reset escprs
-        ret
 
 ;numpad to binary bit.
 nTOb:   cpi  0x31
@@ -513,6 +499,10 @@ scrll:  call clrlne     ;clear current working line.
         jz   eotl       ;jump to end of the line
         ;If not the end of the line, use line count to calculate next first line pointer address.
         call gliadr     ;Get working line number address.
+        mov  a,h
+        ani  0x0F       ;Clear upper nibble
+        ori  0xA0       ;Set default line attribute.
+        mov  h,a
         shld flL
         lxi  h,lnmb
         dcr  m          ;decrease working line number by 1
@@ -553,11 +543,11 @@ cls:    lxi h,flM   ;set start of display buffer
         call gmem   ;get memory needed for a full page, returns it in HL
         mov  b,h    ;copy HL to BC
         mov  c,l    ;BC contains the total amount of memory needed.
-        mvi  a,flMU
+        mvi  a,flMU ;Get first line Upper address.
         ani 0x0F    ;remove the upper 4 config bits
         ori 0x80    ;and then OR the 8th bit
         mov  d,a
-        mvi  e,flML
+        mvi  e,flML ;DE now points to first line start address.
         mov  h,d    ;HL and DE now contains the starting address.
         mov  l,e
         dad  b      ;add BC to HL to get ending address of page. HL now contains ending address
@@ -570,8 +560,6 @@ sfill:  mvi  m,0x20 ;fill page with spaces.
         cmp  l
         jnz  kflin
         ;Done filling, now set some default attributes and line addresses.
-        lxi  h,curs ;reset cursor position to 1
-        mvi  m,0x01
         lxi  h,lnmb ;set working line number to 0
         mvi  m,0x00
 ;Setup the whole screen.
@@ -584,24 +572,29 @@ clrfll: lxi  h,lcnt ;Get line count.
         inr  m      ;Increase working line number
         jmp  clrfll ;loop until done.
 
-;setup done
+;setup done, now reset some things.
 stpdn:  lxi  h,curs ;reset cursor position to 1
         mvi  m,0x01
         lxi  h,lnmb ;set working line number to 0
         mvi  m,0x00
-        call slnt   ;call line setup
-        call dreset ;Display Attributes Reset.
+        call gliadr ;Get line address
+        call csadr  ;update cursor address.
+        ;reset all character attributes.
+        lxi h,9000
+drlp:   mvi m,0x00  ;Default character attributes.
+        inx h
+        mov a,h
+        cpi 0xA0    ;Looking for 0xA000, which is one greater than 0x9FFF.
+        jnz drlp
+        mvi a,0xFF
+        sta escprs      ;reset escprs
         ret
-
 ;Keep filling the buffer.
 kflin:  inx  h
         jmp  sfill
 
-;#########################################################################################################################
-;#########################################################################################################################
 ;Setup next line of text.
 slnt:   call gliadr  ;Get working line start address, returns it in HL
-        shld cladr  ;Store it for later use.
         mvi  m,0x00 ;Set attributes for this line, and for next line of text to be the last line.
         xchg        ;Now put start address in DE
         ;Get column count and add it to HL
@@ -628,7 +621,7 @@ slnt:   call gliadr  ;Get working line start address, returns it in HL
         ;DE is now the next line's start address and HL is the address of the next line pointer.
         mov  a,d    ;Now move DE to the next line address spot in memory, but use the default line settings.
         ani 0x0F    ;remove the first 4 bits
-        ori 0xA0    ;and then OR 0xA0
+        ori flMU    ;and then OR it with default line attributes.
         mov  m,a
         inx  h
         mov  m,e
@@ -639,9 +632,19 @@ wrplne: xchg        ;Get HL back.
         mvi  m,flMU
         inx  h
         mvi  m,flML
+        call csadr      ;update cursor address.
         ret
 
-;Get start address of current working line. Returns it in HL
+;Get cursor address, returns it in HL and bcrs
+csadr:  lhld cladr      ;Get line start address and put it in HL
+        lda  curs       ;get cursor
+        mov  e,a        ;move it to C
+        mvi  d,0x00     ;clear D
+        dad  d          ;add line address to the cursor position to get cursor address.
+        shld bcrs
+        ret
+
+;Get start address of current working line. Returns it in HL and 'cladr'
 gliadr: lda  ccnt   ;get column count and put it in A
         adi  0x03   ;add three bytes to account for the attribute and address bytes.
         mov  c,a    ;move it to C
@@ -654,6 +657,7 @@ gliadr: lda  ccnt   ;get column count and put it in A
         mov  b,a
         mvi  c,flML ;Get First line Lower address.
         dad  b      ;add BC to HL
+        shld cladr
         ret
 
 ;Get memory required for column and line count. Returns it in HL
@@ -744,7 +748,7 @@ blank:  lhld flL   ;get address of first line.
         mov a,m
         cpi 0x00
         jnz  blnktm
-        mvi m,0x0F      ;~250ms timing.
+        mvi m,0x07      ;~125ms timing.
         lxi h,blnkbt    ;increase blinking byte. Gives 250ms, 500ms, 1S, 2S, etc. timings.
         inr m           ;increase blnkbt and let it roll over.
         ret
