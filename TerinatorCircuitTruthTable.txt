@@ -3,3 +3,7 @@ Hex 10 - 13, 18 - 1F, 90 - 93, 98 - 9F
 X00100XX = 1
 X00110XX = 1
 X00111XX = 1
+
+This includes ASCII codes DLE, DC1, DC2, DC3 : CAN, EM, SUB, ESC, FS, GS, RS, US : The rest is in Extended ASCII Codes
+
+Maybe this circuit has something to do with ANSI ESC codes?

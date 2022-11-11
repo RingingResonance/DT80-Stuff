@@ -40,24 +40,15 @@ flM     equ 0xA000      ;Starting point of text.
 dsdflt  equ 0x79        ;Display (0x3F) Defaults
 
 org 0x0000
-Azero:	mvi  a,0x0F	;Disable IRQs
+Azero:  DI  ;Disable IRQs
+	mvi  a,0x0F
  	sim
- 	lxi sp,stack
- 	mvi a,0xFF  ;Turn down brightness of CRT all the way.
-	out 0x3A
-	mvi a,dsdflt  ;Initialize video processor clock and config.
+ 	;mvi a,0xFF  ;Turn down brightness of CRT all the way.
+	;out 0x3A
+	mvi a,0x69  ;Initialize video processor clock and config.
 	out 0x3F
-;initialize serial port
-    ;Configure Bitrate Timer
-    mvi a,0x24  ;Select T0 MSB, RX
-    out 0x13
-    mvi a,0x00
-    out 0x10
-    mvi a,0x14  ;Select T0 LSB, RX
-    out 0x13
-    mvi a,0x0C  ;Load D12 for 9600BAUD
-    out 0x10
-	jmp init
+	;Do memory check.
+	jmp memcheck    ;Jumps back to sysrdy if the memory test passes.
 
 ;# Built in IRQ vectors.
 org	0x0024		;TRAP
@@ -71,44 +62,13 @@ org	0x003C		;RST7.5
     DI
 	jmp  disp
 
-;initialize serial port for default 9600 8N1
-;Do this before memory check in case there is an error and the CRT isn't working because
-;memory check also sends debugging data out the serial port.
 org 0x0044
-init: mvi a,0x64  ;Select T1 MSB, TX
-    out 0x13
-    mvi a,0x00
-    out 0x11
-    mvi a,0x54  ;Select T1 LSB, TX
-    out 0x13
-    mvi a,0x0C  ;Load D12 for 9600BAUD
-    out 0x11
-    ;Configure USART
-    mvi a,0x00  ;Do a reset of the USART
-    out 0x01
-    mvi a,0x00
-    out 0x01
-    mvi a,0x00
-    out 0x01
-    mvi a,0x40  ;Insure that it gets reset.
-    out 0x01
-    mvi a,0x4E  ;Configure serial port for 8N1 Internal Sync
-    out 0x01
-    mvi a,0x00
-    out 0x01
-    mvi a,0x00
-    out 0x01
-    mvi a,0x05  ;Enable transmit and receive.
-    out 0x01
-    ;Configure additional port attributes
-    mvi a,0x00  ;Use external timer for BAUD
-    out 0x3E
-
-;Do memory check.
-    jmp memcheck    ;Jumps back to sysrdy if the memory test passes.
-
-;Initialize memory.
-sysrdy: mvi a,0xFF
+;Running normal system.
+sysrdy: lxi sp,stack
+        call p1init     ;initialize port 1
+        mvi a,dsdflt  ;Initialize video processor clock and config.
+        out 0x3F
+        mvi a,0xFF
         sta escprs
         mvi a,0x00  ;Set default attributes.
         sta sattb
@@ -760,9 +720,54 @@ t2dec:  dcr m
         ret
 
 ;******************************************************************************
+;initialize serial port
+;Configure Bitrate Timer
+p1init: mvi a,0x24  ;Select T0 MSB, RX
+    out 0x13
+    mvi a,0x00
+    out 0x10
+    mvi a,0x14  ;Select T0 LSB, RX
+    out 0x13
+    mvi a,0x0C  ;Load D12 for 9600BAUD
+    out 0x10
+    mvi a,0x64  ;Select T1 MSB, TX
+    out 0x13
+    mvi a,0x00
+    out 0x11
+    mvi a,0x54  ;Select T1 LSB, TX
+    out 0x13
+    mvi a,0x0C  ;Load D12 for 9600BAUD
+    out 0x11
+    ;Setting the timer resets USART, but it still wants to see 00's for a few cycles for some reason.
+    ;Configure USART
+    mvi a,0x00
+    out 0x01
+    mvi a,0x00
+    out 0x01
+    mvi a,0x00  ;Send 00's three times. For some reason this is needed to make the USART work even after a reset.
+    out 0x01
+    mvi a,0x40
+    out 0x01
+    mvi a,0x4E  ;Configure serial port for 8N1 Internal Sync
+    out 0x01
+    mvi a,0x00
+    out 0x01
+    mvi a,0x00  ;Do this twice to make USART changes take effect. I don't know why.
+    out 0x01
+    mvi a,0x05  ;Enable transmit and receive.
+    out 0x01
+    ;Configure additional port attributes
+    mvi a,0x00  ;Use external timer for BAUD
+    out 0x3E
+    ret
+;******************************************************************************
 ;******************************************************************************
 ;Main Memory Test routine.
-memcheck: lxi b,0x0080    ;Use BC for walking bits right
+memcheck: mvi  a,0xA0      ;Load video registers with initializers so that it's not using DMA and slowing down the memory check.
+        out  0x3C
+        mvi  a,0x00
+        out  0x3B
+        mvi c,0x80    ;Use BC for walking bits right
         lxi d,0x0008    ;A '1' in D indicates a chip failure. E is pass count. Do 8 passes to test all 8 bits of each byte of ram.
 chagn:  lxi h,0x8000
         mov  b,c    ;Move C to B
@@ -795,13 +800,21 @@ cntck:  mov  a,b        ;Now rotate B to the right.
         ;Now move to next memory address.
         mov  a,h
         cpi  0x8F
-        jnz  notdnr
+        jnz  notdnr     ;not done reading.
         mov  a,l
         cpi  0xFF
-        jnz  notdnr
+        jnz  notdnr     ;not done reading.
         jmp  pssdne
 notdnr: inx  h
         jmp  memrd
+
+;Done with a single pass. Rotate C and decrease E
+pssdne: dcr e
+        jz  memdone     ;If E is 0 then we are done with memory check.
+        mov a,c         ;Rotate C to the right.
+        rrc
+        mov c,a
+        jmp chagn       ;Load in the next set and do the test again.
 
 ;Record that there was an error if there was one.
 ;Figure out which chip has a failure from top to bottom.
@@ -881,18 +894,10 @@ b1lwr:  mov a,d
         mov d,a
         jmp cntck   ;continue checking.
 
-;Done with a single pass. Rotate C and decrease E
-pssdne: dcr e
-        jz  memdone     ;If E is 0 then we are done with memory check.
-        mov a,c         ;Rotate C to the right.
-        rrc
-        mov c,a
-        jmp chagn
-
 ;If there was a failure, try to find some good memory to put basic text data to show which ram chips were detected failures.
 memdone: mov  a,d
          ori  0x00
-         jz  sysrdy      ;If no 1's in D then memory test passed continue to system ready.
+         jz  sysrdy      ;If no 1's in D then memory test passed and continue to system ready.
          mvi  a,0x00
          out  0x3B
          mov a,d
@@ -930,6 +935,7 @@ stk4:   lxi sp,0x83FF
         ;Load each bit into carry and test. Do this 8 times.
 dinit:  mvi a,0x08  ;Turn brightness of CRT up to a level that is just visible.
         out 0x3A
+        call p1init ;Initialize the serial port.
         mvi  e,0x08
 prterr: mov a,d
         ral
