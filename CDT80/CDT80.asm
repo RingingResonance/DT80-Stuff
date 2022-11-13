@@ -37,18 +37,39 @@ savsec  equ 60          ;Screen saver timer in seconds.
 flMU    equ 0xA0        ;Starting point of text and it's attributes. Upper
 flML    equ 0x00        ;Starting point of text. Lower
 flM     equ 0xA000      ;Starting point of text.
-dsdflt  equ 0x79        ;Display (0x3F) Defaults
+dsdflt  equ 0x79        ;Display Defaults (IO address 0x3F)
+;String pointers.
+soffset     equ 0x0044        ;String offset.
+SelfTest    equ 0x0000 + soffset
+Pounds      equ 0x000A + soffset
+MemTest     equ 0x0016 + soffset
+AttrTst     equ 0x0027 + soffset
+ROMCHK      equ 0x0037 + soffset
+Fail        equ 0x0045 + soffset
+Pass        equ 0x0022 + soffset
+AM1         equ 0x004A + soffset
+RM1         equ 0x005C + soffset
+RM2         equ 0x006E + soffset
 
 org 0x0000
-Azero:  DI  ;Disable IRQs
+Azero:  nop
+    nop
+    DI  ;Disable IRQs
 	mvi  a,0x0F
  	sim
- 	;mvi a,0xFF  ;Turn down brightness of CRT all the way.
-	;out 0x3A
+    ;CPU init and power delay done. Continue with display init and memory check.
+ 	mvi a,0xFF  ;Turn down brightness of CRT all the way.
+	out 0x3A
 	mvi a,0x69  ;Initialize video processor clock and config.
 	out 0x3F
 	;Do memory check.
 	jmp memcheck    ;Jumps back to sysrdy if the memory test passes.
+sysrdy: lxi sp,stack
+        call p1init     ;initialize port 1
+        mvi a,dsdflt    ;Initialize video processor clock and config.
+        out 0x3F
+        sta dspstt      ;And set defaults
+        jmp IRQskp
 
 ;# Built in IRQ vectors.
 org	0x0024		;TRAP
@@ -63,44 +84,45 @@ org	0x003C		;RST7.5
 	jmp  disp
 
 org 0x0044
+    nop
+    nop
+    nop
+    nop
+org 0x00C4
 ;Running normal system.
-sysrdy: lxi sp,stack
-        call p1init     ;initialize port 1
-        mvi a,dsdflt  ;Initialize video processor clock and config.
-        out 0x3F
-        mvi a,0xFF
-        sta escprs
-        mvi a,0x00  ;Set default attributes.
-        sta sattb
-        mvi a,dsdflt
-        sta dspstt  ;set display defaults
 ;Initialize display for 80col, 22lines.
+IRQskp: mvi a,0xFF      ;Initialize ESC code counter.
+        sta escprs
+        mvi a,0x00      ;Set default character attributes.
+        sta sattb
         lxi h,lcnt      ;22 lines
         mvi m,0x16
         lxi h,ccnt      ;80 column
-        mvi m,0x50      ;Use actual address
-        call cls        ;clear screen
+        mvi m,0x50
+        call cls        ;clear and initialize screen buffer memory
+        call cls
+        call tbrhi      ;Turn brightness up and restart the screen saver timer.
+        call stbkg      ;Draw self test placard.
         ;Initialize Input Buffer Pointers.
         mvi a,0x01
         sta RXBFF
         mvi a,0x01
         sta RXBPT
         ;Configure IRQ's
-        mvi a,0x09  ;Enable IRQ's 6.5, and 7.5
+        mvi a,0x09      ;Enable IRQ's 6.5, and 7.5
         sim
-        EI          ;enable IRQ's
-        call tbrhi  ;Turn brightness up and restart the screen saver timer.
+        EI              ;enable IRQ's
 
 ;###############################################################################################################################
 ;Main loop.
-main:   lda timer1  ;This address gets decremented by the display routine.
+main:   lda timer1      ;This address gets decremented by the display routine.
         ora a
         cz  savtim
         call blnkcrs    ;Blink the cursor.
-        call prtbff ;Print what's in the buffer onto the screen.
-        call blnker ;Text blink routine.
-        hlt         ;shhhh, goto sleep...
-        jmp  main   ;Loop
+        call prtbff     ;Print what's in the buffer onto the screen.
+        call blnker     ;Text blink routine.
+        hlt             ;shhhh, goto sleep...
+        jmp  main       ;Loop
 
 ;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 ;Hardware serial port routines.
@@ -287,11 +309,11 @@ chESC:  lda escprs
         jz  sattrb      ;Set line attribute command.
         ;check for 'c' command.
         cpi 0x63        ;check for the letter 'c'
-        jz  schar      ;Set char attribute command.
+        jz  schar       ;Set char attribute command.
         ;If no valid ESC commands were found then reset escprs to 0xFF
         mvi a,0xFF
         sta escprs
-        jmp noESC      ;No ESC command found.
+        jmp noESC       ;No ESC command found.
 
 ;Display Setting ESC code
 sdsp:   mov a,b
@@ -496,23 +518,24 @@ clrfil: mov  h,d        ;Get address pointer back from DE
         jmp  clrfil
 
 ;Clear screen and buffer.
-cls:    lxi h,flM   ;set start of display buffer
+cls:    lxi h,flM       ;set start of display buffer
         shld flL
         lxi h,pgln      ;get total number of lines on this page.
         mvi m,0x00      ;Clear it.
-        call gmem   ;get memory needed for a full page, returns it in HL
-        mov  b,h    ;copy HL to BC
-        mov  c,l    ;BC contains the total amount of memory needed.
-        mvi  a,flMU ;Get first line Upper address.
-        ani 0x0F    ;remove the upper 4 config bits
-        ori 0x80    ;and then OR the 8th bit
-        mov  d,a
-        mvi  e,flML ;DE now points to first line start address.
-        mov  h,d    ;HL and DE now contains the starting address.
+        call gmem       ;get memory needed for a full page, returns it in HL
+        mov  b,h        ;copy HL to BC
+        mov  c,l        ;BC contains the total amount of memory needed.
+        mvi  a,flMU     ;Get first line Upper address.
+        ani 0x0F        ;remove the upper 4 config bits
+        ori 0x80        ;and then OR the 8th bit
+        mov  d,a        ;Now we have the upper address byte.
+        mvi  e,flML     ;DE now points to first line start address.
+        mov  h,d        ;HL and DE now contains the starting address.
         mov  l,e
-        dad  b      ;add BC to HL to get ending address of page. HL now contains ending address
-        xchg        ;Exchange DE and HL, HL is now starting address again, and DE is ending address.
-sfill:  mvi  m,0x20 ;fill page with spaces.
+        dad  b          ;add BC to HL to get ending address of page. HL now contains ending address
+        xchg            ;Exchange DE and HL, HL is now starting address again, and DE is ending address.
+        ;Space fill.
+sfill:  mvi  m,0x20     ;fill page with spaces.
         mov  a,d
         cmp  h
         jnz  kflin
@@ -520,75 +543,74 @@ sfill:  mvi  m,0x20 ;fill page with spaces.
         cmp  l
         jnz  kflin
         ;Done filling, now set some default attributes and line addresses.
-        lxi  h,lnmb ;set working line number to 0
+        lxi  h,lnmb     ;set working line number to 0
         mvi  m,0x00
 ;Setup the whole screen.
-clrfll: lxi  h,lcnt ;Get line count.
-        lda  lnmb   ;Get working line number.
-        cmp  m      ;Compare the two.
-        jz   stpdn  ;If the same then we are done.
-        call slnt   ;call line setup
-        lxi  h,lnmb ;Get working line number pointer
-        inr  m      ;Increase working line number
-        jmp  clrfll ;loop until done.
-
+clrfll: lxi  h,lcnt     ;Get line count.
+        lda  lnmb       ;Get working line number.
+        cmp  m          ;Compare the two.
+        jz   stpdn      ;If the same then we are done.
+        call slnt       ;call line setup
+        lxi  h,lnmb     ;Get working line number pointer
+        inr  m          ;Increase working line number
+        jmp  clrfll     ;loop until done.
+;Keep filling the buffer.
+kflin:  inx  h
+        jmp  sfill
 ;setup done, now reset some things.
-stpdn:  lxi  h,curs ;reset cursor position to 1
+stpdn:  lxi  h,curs     ;reset cursor position to 1
         mvi  m,0x01
-        lxi  h,lnmb ;set working line number to 0
+        lxi  h,lnmb     ;set working line number to 0
         mvi  m,0x00
-        call gliadr ;Get line address
-        call csadr  ;update cursor address.
-        ;reset all character attributes.
+        call gliadr
+        call csadr
+;reset all character attributes.
         lxi h,9000
-drlp:   mvi m,0x00  ;Default character attributes.
+drlp:   mvi m,0x00      ;Default character attributes.
         inx h
         mov a,h
-        cpi 0xA0    ;Looking for 0xA000, which is one greater than 0x9FFF.
+        cpi 0xA0        ;Looking for 0xA000, which is one greater than 0x9FFF.
         jnz drlp
         mvi a,0xFF
         sta escprs      ;reset escprs
         ret
-;Keep filling the buffer.
-kflin:  inx  h
-        jmp  sfill
 
-;Setup next line of text.
-slnt:   call gliadr  ;Get working line start address, returns it in HL
-        mvi  m,0x00 ;Set attributes for this line, and for next line of text to be the last line.
-        xchg        ;Now put start address in DE
+;Setup next line of text routine.
+slnt:   call gliadr     ;Get working line start address, returns it in HL
+        mvi  m,0x00     ;Set attributes for this line.
+        xchg            ;Now put start address in DE
         ;Get column count and add it to HL
         lxi  h,ccnt
         mov  c,m
-        mvi  b,0x00 ;clear B
-        xchg        ;get HL back from DE, as it contains the start address of the working line.
-        dad  b      ;add BC to HL, now it contains the line end address
-        inx  h      ;Increase HL by 1 to get past end of line. HL is now pointing to the Upper next line Address
+        mvi  b,0x00     ;clear B
+        xchg            ;get HL back from DE, as it contains the start address of the working line.
+        dad  b          ;add BC to HL, now it contains the line end address
+        inx  h          ;Increase HL by 1 to get past end of line. HL is now pointing to the Upper next line Address
         ;Now check if our working line is the last line. If it is then we need to point the next line to the first memory address.
-        xchg        ;save HL for later without using stack
-        lda  lcnt     ;get total line count
+        xchg            ;save HL for later without using stack
+        lda  lcnt       ;get total line count
         dcr  a          ;Decrease A by 1
         lxi  h,lnmb     ;get working line number
         cmp  m          ;compare it
-        jz   wrplne     ;jump to wrap line routine. Make last line point to first memory address containing text info.
-        xchg        ;Get HL back, we don't need DE anymore. It should still be pointing to H of the next line pointer.
-        mov  d,h    ;Make a copy of HL for later use.
+        jz   wrplne     ;if the same, jump to wrap line routine. Make last line point to first memory address containing text info.
+        xchg            ;Get HL back, we don't need DE anymore. It should still be pointing to H of the next line pointer.
+        mov  d,h        ;Make a copy of HL for later use.
         mov  e,l
-        inx  h      ;Make HL contain the start address of the next line.
+        inx  h          ;Make HL contain the start address of the next line.
         inx  h
-        mvi  m,0x00 ;Set default for this line to be the last line.
-        xchg        ;Get the working line next address's address back from DE and put it in HL
+        mvi  m,0x00     ;Set default for this line to be the last line.
+        xchg            ;Get the working line next address's address back from DE and put it in HL
         ;DE is now the next line's start address and HL is the address of the next line pointer.
-        mov  a,d    ;Now move DE to the next line address spot in memory, but use the default line settings.
-        ani 0x0F    ;remove the first 4 bits
-        ori flMU    ;and then OR it with default line attributes.
+        mov  a,d        ;Now move DE to the next line address spot in memory, but use the default line settings.
+        ani 0x0F        ;remove the first 4 bits
+        ori flMU        ;and then OR it with default line attributes.
         mov  m,a
         inx  h
         mov  m,e
         call csadr      ;update cursor address.
         ret
 ;Make last line point to first memory address containing text info.
-wrplne: xchg        ;Get HL back.
+wrplne: xchg            ;Get HL back.
         mvi  m,flMU
         inx  h
         mvi  m,flML
@@ -605,18 +627,18 @@ csadr:  lhld cladr      ;Get line start address and put it in HL
         ret
 
 ;Get start address of current working line. Returns it in HL and 'cladr'
-gliadr: lda  ccnt   ;get column count and put it in A
-        adi  0x03   ;add three bytes to account for the attribute and address bytes.
-        mov  c,a    ;move it to C
-        mvi  b,0x00 ;clear B, BC now contains line data count.
-        lda  lnmb   ;Put working line number in A
-        call mult   ;Multiply BC and A, returns the result in HL.
-        mvi  a,flMU ;Get First line Upper address.
-        ani 0x0F    ;remove the upper 4 bits
-        ori 0x80    ;and then OR the 7th bit to make it always '1'
+gliadr: lda  ccnt       ;get column count and put it in A
+        adi  0x03       ;add three bytes to account for the attribute and address bytes.
+        mov  c,a        ;move it to C
+        mvi  b,0x00     ;clear B, BC now contains line data count.
+        lda  lnmb       ;Put working line number in A
+        call mult       ;Multiply BC and A, returns the result in HL.
+        mvi  a,flMU     ;Get First line Upper address.
+        ani 0x0F        ;remove the upper 4 bits
+        ori 0x80        ;and then OR the 7th bit to make it always '1'
         mov  b,a
-        mvi  c,flML ;Get First line Lower address.
-        dad  b      ;add BC to HL
+        mvi  c,flML     ;Get First line Lower address.
+        dad  b          ;add BC to HL
         shld cladr
         ret
 
@@ -738,21 +760,9 @@ p1init: mvi a,0x24  ;Select T0 MSB, RX
     out 0x13
     mvi a,0x0C  ;Load D12 for 9600BAUD
     out 0x11
-    ;Setting the timer resets USART, but it still wants to see 00's for a few cycles for some reason.
+    ;Setting the timer resets USART.
     ;Configure USART
-    mvi a,0x00
-    out 0x01
-    mvi a,0x00
-    out 0x01
-    mvi a,0x00  ;Send 00's three times. For some reason this is needed to make the USART work even after a reset.
-    out 0x01
-    mvi a,0x40
-    out 0x01
-    mvi a,0x4E  ;Configure serial port for 8N1 Internal Sync
-    out 0x01
-    mvi a,0x00
-    out 0x01
-    mvi a,0x00  ;Do this twice to make USART changes take effect. I don't know why.
+    mvi a,0x4E  ;Configure serial port for 8N1, 16 clocks per bit.
     out 0x01
     mvi a,0x05  ;Enable transmit and receive.
     out 0x01
@@ -760,6 +770,208 @@ p1init: mvi a,0x24  ;Select T0 MSB, RX
     mvi a,0x00  ;Use external timer for BAUD
     out 0x3E
     ret
+;******************************************************************************
+;Self test results page stuff.
+stbkg:  mvi  b,0x1A     ;Move cursor 26 lines to the right.
+        mvi  c,0x01     ;Start on second line of text.
+        call mvcurs     ;Update cursor address.
+        mvi  b,0x1A     ;Draw 26 diamonds.
+        call dmonds     ;Draw them.
+        ;Second line of test results.
+        mvi  b,0x1A     ;Move cursor 26 lines to the right.
+        mvi  c,0x02     ;Third line of text.
+        call mvcurs     ;Update cursor address.
+        mvi  b,0x06     ;Draw 6 diamonds.
+        call dmonds     ;Draw them.
+        mvi  b,0x2E     ;Move cursor 46 lines to the right.
+        mvi  c,0x02     ;Third line of text.
+        call mvcurs     ;Update cursor address.
+        mvi  b,0x06     ;Draw 6 diamonds.
+        call dmonds     ;Draw them.
+        ;3rd - 19th lines
+        mvi  c,0x03     ;Third line of text.
+drpt:   mvi  b,0x1A     ;Move cursor 26 lines to the right.
+        call mvcurs     ;Update cursor address.
+        mvi  a,0x00
+        call ftext      ;Draw single diamond.
+        mvi  b,0x33     ;Move cursor 51 lines to the right.
+        call mvcurs     ;Update cursor address.
+        mvi  a,0x00
+        call ftext      ;Draw single diamond.
+        inr  c          ;Move to next line of text.
+        mov  a,c
+        cpi  0x14       ;check if 19th line.
+        jnz  drpt
+        ;draw 20th line.
+        mvi  b,0x1A     ;Move cursor 26 lines to the right.
+        mvi  c,0x14     ;Start on 20th line of text.
+        call mvcurs     ;Update cursor address.
+        mvi  b,0x1A     ;Draw 26 diamonds.
+        call dmonds     ;Draw them.
+;Print background texts.
+        ; "Self Test"
+        mvi  b,0x22     ;Move cursor 34 lines to the right.
+        mvi  c,0x02     ;Third line of text.
+        call mvcurs     ;Update cursor address.
+        lxi  h,SelfTest ;Print "Self Test "
+        call fstring
+        ;Print #'s
+        mvi  b,0x1C     ;Move cursor 28 lines to the right.
+        mvi  c,0x04     ;Third line of text.
+        call mvcurs     ;Update cursor address.
+        lxi  h,Pounds   ;Get #'s
+        call fstring    ;Print them.
+        ;Print "Memory Test Pass"
+        mvi  b,0x1E
+        mvi  c,0x04     ;Third line of text.
+        call mvcurs     ;Update cursor address.
+        lxi  h,MemTest  ;Print "Memory Test Pass"
+        call fstring
+        ;Print "Attributes Test"
+        mvi  b,0x1E
+        mvi  c,0x06     ;Third line of text.
+        call mvcurs     ;Update cursor address.
+        lxi  h,AttrTst  ;Print "Attributes Test"
+        call fstring
+        ;Print "ROM Checksums"
+        mvi  b,0x1E
+        mvi  c,0x0A     ;Third line of text.
+        call mvcurs     ;Update cursor address.
+        lxi  h,ROMCHK   ;Print "ROM Checksums "
+        call fstring
+;Print chip numbers
+        ;Print Attributes Memory Chip Numbers
+        mvi  b,0x1F
+        mvi  c,0x07     ;Third line of text.
+        call mvcurs     ;Update cursor address.
+        lxi  h,AM1      ;Print "ROM Checksums "
+        call fstring
+        ;Print ROM Memory Chip Numbers
+        mvi  b,0x1F
+        mvi  c,0x0B     ;Third line of text.
+        call mvcurs     ;Update cursor address.
+        lxi  h,RM1      ;Print "ROM Checksums "
+        call fstring
+        ;Print Second set of ROM Memory Chip Numbers
+        mvi  b,0x1F
+        mvi  c,0x0F     ;Third line of text.
+        call mvcurs     ;Update cursor address.
+        lxi  h,RM2      ;Print "ROM Checksums "
+        call fstring
+;Do attributes memory check.
+        mvi  b,0x1E
+        mvi  c,0x08     ;8th line of text.
+        call  prtAP
+        mvi  b,0x23
+        mvi  c,0x08     ;8th line of text.
+        call  prtAP
+        mvi  b,0x28
+        mvi  c,0x08     ;8th line of text.
+        call  prtAP
+        mvi  b,0x2D
+        mvi  c,0x08     ;8th line of text.
+        call  prtAP
+        ;Fill with data and then check.
+        mvi  b,0x0F
+        call atrchk
+        mvi  b,0x00
+        call atrchk
+;Put Cursor onto last line.
+        lda  lcnt       ;Get total line count
+        dcr  a          ;Decrease it by one
+        sta  pgln       ;Store it in line count.
+        mvi  b,0x01
+        mvi  c,0x15     ;Third line of text.
+        call mvcurs     ;Update cursor address.
+        ret
+
+;Attributes memory checker.
+atrchk: lxi h,9000
+afll:   mov m,b
+        inx h
+        mov a,h
+        cpi 0xA0        ;Looking for 0xA000, which is one greater than 0x9FFF.
+        jnz afll
+        ;Now check
+        lxi h,9000
+atst:   mov a,m
+        ani 0x0F        ;Only test lower nibble
+        xra b
+        cnz attrFl      ;If not zero then there was a failure.
+        inx h
+        mov a,h
+        cpi 0xA0        ;Looking for 0xA000, which is one greater than 0x9FFF.
+        jnz atst
+        ret
+
+;Figure out which chip had the failure.
+attrFl: push b
+        push h
+        lda  dspstt     ;If there is an attributes memory fault then disable global attributes.
+        ani  0xEF
+        out  0x3F
+        sta  dspstt
+        mvi  a,0x9B
+        cmp  h      ;if H>A then C=1. else C=0
+        jc   atr4f
+        mvi  a,0x97
+        cmp  h      ;if H>A then C=1. else C=0
+        jc   atr3f
+        mvi  a,0x93
+        cmp  h      ;if H>A then C=1. else C=0
+        jc   atr2f
+        jmp  atr1f
+
+atr1f:  mvi  b,0x1E
+        mvi  c,0x08     ;8th line of text.
+        jmp  prtAF
+atr2f:  mvi  b,0x23
+        mvi  c,0x08     ;8th line of text.
+        jmp  prtAF
+atr3f:  mvi  b,0x28
+        mvi  c,0x08     ;8th line of text.
+        jmp  prtAF
+atr4f:  mvi  b,0x2D
+        mvi  c,0x08     ;8th line of text.
+        jmp  prtAF
+;Print the failure
+prtAF:  call mvcurs     ;Update cursor address.
+        lxi  h,Fail     ;Print "Fail "
+        call fstring
+        pop  h
+        pop  b
+        ret
+;Print the Passes
+prtAP:  call mvcurs     ;Update cursor address.
+        lxi  h,Pass     ;Print "Fail "
+        call fstring
+        ret
+;Draw a line of diamond symbols as long as what is specified in reg B
+dmonds: mvi  c,0x00
+dmnds:  mvi  a,0x00
+        call ftext
+        inr  c
+        mov  a,b
+        xra  c
+        jnz  dmnds
+        ret
+;Move cursor to new location specified by b and c.
+mvcurs: lxi  h,curs
+        mov  m,b
+        lxi  h,lnmb
+        mov  m,c
+        push b
+        call gliadr
+        call csadr
+        pop  b
+        ret
+;Print string pointed to by HL.
+fstring: mov a,m
+        ori  0x00
+        rz
+        call ftext
+        inx  h
+        jmp  fstring
 ;******************************************************************************
 ;******************************************************************************
 ;Main Memory Test routine.
@@ -941,12 +1153,12 @@ prterr: mov a,d
         ral
         mov d,a
         jc   fbnk       ;Failure detected in this bank. Print 'F'
-        mvi  a,0x50     ;Load the ASCII letter 'P' into A
+        mvi  a,0x50     ;No failure in this bank, load the ASCII letter 'P' into A
         mov  m,a        ;Print successes to screen
         call TX         ;Try to send it out the serial port as well.
 nxbnk:  dcr  e
         inx  h
-        jz   errlp
+        jz   errlp      ;When done, goto error loop where the CPU is halted.
         jmp  prterr
 ;Print Failures.
 fbnk:   mvi  a,0x46     ;Load the ASCII letter 'F' into A
