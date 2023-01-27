@@ -19,25 +19,27 @@ pgln    equ 0x8FF1      ;Page total number of lines
 cladrU  equ 0x8FF0      ;Current Line Address Upper
 cladr   equ 0x8FEF      ;Current Line Address Lower
 svrtmr  equ 0x8FEE      ;Screen Saver Timer.
-svrbtr  equ 0x8FED      ;Screen Saver Brightness
-bcrsU   equ 0x8FEC
-bcrs    equ 0x8FEB
-RXBPT   equ 0x8FEA      ;RX buffer IN index. Used by the RX routine.
-RXBFF   equ 0x8FE9      ;RX buffer OUT index. Used by the ftext routine.
-escprs  equ 0x8FE8      ;ESC pressed flags.
-dspstt  equ 0x8FE7      ;Display settings
-sattb   equ 0x8FE6
-orgatr  equ 0x8FE5
-chkadrU equ 0x8FE4
-chkadr  equ 0x8FE3      ;ROM checksum address temp storage.
-chksumU equ 0x8FE2
-chksum  equ 0x8FE1      ;ROM checksum storage.
-stack   equ 0x8FE0      ;Stack pointer start.
+svrtmr2 equ 0x8FED      ;Screen Blanker Timer.
+svrbtr  equ 0x8FEC      ;Screen Saver Brightness
+bcrsU   equ 0x8FEB
+bcrs    equ 0x8FEA
+RXBPT   equ 0x8FE9      ;RX buffer IN index. Used by the RX routine.
+RXBFF   equ 0x8FE8      ;RX buffer OUT index. Used by the ftext routine.
+escprs  equ 0x8FE7      ;ESC pressed flags.
+dspstt  equ 0x8FE6      ;Display settings
+sattb   equ 0x8FE5
+orgatr  equ 0x8FE4
+chkadrU equ 0x8FE3
+chkadr  equ 0x8FE2      ;ROM checksum address temp storage.
+chksumU equ 0x8FE1
+chksum  equ 0x8FE0      ;ROM checksum storage.
+stack   equ 0x8FDF      ;Stack pointer start.
 bgnadr  equ 0x8000      ;Beginning address of ram
 ;Constants
 RXstrt  equ 0x8C00      ;RX buffer start address
 RXblng  equ 0xFF        ;RX buffer Max Length
-savsec  equ 60          ;Screen saver timer in seconds.
+savsec  equ 0x4B        ;Screen saver timer in 4 second intervals. (0x4B = 300S = 5min)
+scrnbk  equ 0xE1        ;Screen blank timer in 4 second intervals. (0xE1 = 900S = 15min)
 flMU    equ 0xA0        ;Starting point of text and it's attributes. Upper
 flML    equ 0x00        ;Starting point of text. Lower
 flM     equ 0xA000      ;Starting point of text.
@@ -115,31 +117,46 @@ IRQskp: lxi h,lcnt      ;22 lines
 
 ;###############################################################################################################################
 ;Main loop.
-main:   lda timer1      ;This address gets decremented by the display routine.
-        ora a
-        cz  savtim
+main:   call scrnsvr    ;Screen saver routine.
         call blnkcrs    ;Blink the cursor.
         call prtbff     ;Print what's in the buffer onto the screen.
         call blnker     ;Text blink routine.
         hlt             ;shhhh, goto sleep...
         jmp  main       ;Loop
-;**************************************************************************************8
+;***************************************************************************************
+
+scrnsvr: lda timer1      ;This variable gets decremented by the display routine 60 times per second.
+        ora a
+        jz  savtim
+        ret
 ;Screen Saver Timer.
-savtim: lda svrtmr
+savtim: lda svrtmr  ;Seconds counter for screen dimming
         dcr a
         sta svrtmr
-        cz  tbrlow  ;turn brightness low after a few seconds.
-        lxi h,timer1 ;This address gets decremented by the display routine.
-        mvi m,0x1E
+        cz  tbrlow  ;turn brightness low after a specified number of seconds.
+        ;Seconds counter for screen blanking
+        lda svrtmr2
+        dcr a
+        sta svrtmr2
+        cz  tbroff
+        ;Timer1 reset
+        lxi h,timer1 ;This address gets decremented by the display routine 60 times per second.
+        mvi m,0xF0   ;4 second intervals.
         ret
 ;Screen Saver Brightness Adjustment.
+tbroff: mvi a,0xFF  ;Turn brightness of CRT all the way..
+        out 0x3A
+        ret
 tbrlow: mvi a,0x08  ;Turn down brightness of CRT.
         out 0x3A
         ret
 tbrhi:  mvi a,0x00  ;Turn up brightness of CRT all the way.
         out 0x3A
-        mvi a,savsec    ;Reset the screen saver timer.
+        ;Reset the screen saver timers.
+        mvi a,savsec    ;Dim timer.
         sta svrtmr
+        mvi a,scrnbk    ;Blank timer.
+        sta svrtmr2
         ret
 
 ;Blink Cursor
