@@ -1,0 +1,8 @@
+ESC+c+;
+
+1=dim text
+2=invert text
+3=blink text
+4=use alternate character ROM
+
+These are toggle in the current build.

@@ -124,30 +124,29 @@ main:   call scrnsvr    ;Screen saver routine.
         hlt             ;shhhh, goto sleep...
         jmp  main       ;Loop
 ;***************************************************************************************
-
+;Screen Saver Timer.
 scrnsvr: lda timer1      ;This variable gets decremented by the display routine 60 times per second.
         ora a
-        jz  savtim
-        ret
-;Screen Saver Timer.
-savtim: lda svrtmr  ;Seconds counter for screen dimming
-        dcr a
-        sta svrtmr
-        cz  tbrlow  ;turn brightness low after a specified number of seconds.
-        ;Seconds counter for screen blanking
-        lda svrtmr2
-        dcr a
-        sta svrtmr2
-        cz  tbroff
+        rnz
         ;Timer1 reset
         lxi h,timer1 ;This address gets decremented by the display routine 60 times per second.
         mvi m,0xF0   ;4 second intervals.
-        ret
-;Screen Saver Brightness Adjustment.
-tbroff: mvi a,0xFF  ;Turn brightness of CRT all the way..
+        ;Seconds counter for screen blanking
+        lda svrtmr2
+        ora a
+        jz  tbroff
+        dcr a
+        sta svrtmr2
+        ;Seconds counter for screen dimming
+        lda svrtmr
+        dcr a
+        sta svrtmr
+        rnz
+;Screen Saver Brightness Adjustments.
+tbrlow: mvi a,0x07  ;Turn down brightness of CRT.
         out 0x3A
         ret
-tbrlow: mvi a,0x08  ;Turn down brightness of CRT.
+tbroff: mvi a,0xFF  ;Turn brightness of CRT all the way off..
         out 0x3A
         ret
 tbrhi:  mvi a,0x00  ;Turn up brightness of CRT all the way.
